@@ -1,4 +1,6 @@
 const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField } = require('discord.js');
+const { createCanvas, loadImage, registerFont } = require('canvas');
+const path = require('path');
 
 // Load dotenv only for local development
 if (process.env.NODE_ENV !== 'production') {
@@ -36,6 +38,129 @@ const client = new Client({
         GatewayIntentBits.GuildModeration
     ]
 });
+
+// ========== WELCOME IMAGE GENERATOR ==========
+async function generateWelcomeImage(member) {
+    try {
+        // Create canvas (1200 x 500 pixels)
+        const width = 1200;
+        const height = 500;
+        const canvas = createCanvas(width, height);
+        const ctx = canvas.getContext('2d');
+
+        // Background gradient (Dark Red to Black theme)
+        const gradient = ctx.createLinearGradient(0, 0, width, height);
+        gradient.addColorStop(0, '#1a0000');
+        gradient.addColorStop(0.5, '#2d0000');
+        gradient.addColorStop(1, '#0a0000');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, width, height);
+
+        // Add decorative diagonal lines
+        ctx.strokeStyle = '#ff0000';
+        ctx.lineWidth = 2;
+        ctx.globalAlpha = 0.3;
+        for (let i = -height; i < width + height; i += 40) {
+            ctx.beginPath();
+            ctx.moveTo(i, 0);
+            ctx.lineTo(i + height, height);
+            ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+
+        // Draw border
+        ctx.strokeStyle = '#ff3333';
+        ctx.lineWidth = 5;
+        ctx.strokeRect(10, 10, width - 20, height - 20);
+
+        // Draw "WELCOME" text (large, bold)
+        ctx.font = 'bold 80px "Arial"';
+        ctx.fillStyle = '#ff3333';
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
+        ctx.shadowBlur = 10;
+        ctx.textAlign = 'center';
+        ctx.fillText('WELCOME', width / 2, 100);
+        
+        // Draw "TO" text
+        ctx.font = '40px "Arial"';
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText('TO', width / 2, 160);
+
+        // Draw server name
+        ctx.font = 'bold 45px "Arial"';
+        ctx.fillStyle = '#ff4444';
+        ctx.fillText('CJ & RCS CRACK', width / 2, 220);
+
+        // Draw avatar circle
+        const avatarSize = 150;
+        const avatarX = width / 2 - avatarSize / 2;
+        const avatarY = 240;
+        
+        // Fetch user's avatar
+        const avatarURL = member.user.displayAvatarURL({ extension: 'png', size: 256 });
+        const avatarImage = await loadImage(avatarURL);
+        
+        // Create circular clip
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(width / 2, avatarY + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
+        ctx.closePath();
+        ctx.clip();
+        
+        // Draw avatar
+        ctx.drawImage(avatarImage, avatarX, avatarY, avatarSize, avatarSize);
+        ctx.restore();
+        
+        // Draw avatar border
+        ctx.beginPath();
+        ctx.arc(width / 2, avatarY + avatarSize / 2, avatarSize / 2 + 5, 0, Math.PI * 2);
+        ctx.strokeStyle = '#ff3333';
+        ctx.lineWidth = 4;
+        ctx.stroke();
+
+        // Draw username
+        let username = member.user.username;
+        if (username.length > 20) {
+            username = username.substring(0, 18) + '...';
+        }
+        
+        ctx.font = 'bold 36px "Arial"';
+        ctx.fillStyle = '#ffffff';
+        ctx.shadowBlur = 5;
+        ctx.fillText(username, width / 2, avatarY + avatarSize + 45);
+        
+        // Draw discriminator/display name line
+        ctx.font = '20px "Arial"';
+        ctx.fillStyle = '#ff8888';
+        ctx.fillText(`@${member.user.discriminator === '0' ? member.user.username.toLowerCase() : member.user.tag}`, width / 2, avatarY + avatarSize + 80);
+        
+        // Draw decorative elements - stars
+        ctx.fillStyle = '#ff0000';
+        ctx.shadowBlur = 8;
+        for (let i = 0; i < 15; i++) {
+            const starX = 30 + Math.random() * (width - 60);
+            const starY = 30 + Math.random() * (height - 310);
+            ctx.beginPath();
+            ctx.arc(starX, starY, 2 + Math.random() * 3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        ctx.shadowBlur = 0;
+        
+        // Add member count at bottom
+        ctx.font = '18px "Arial"';
+        ctx.fillStyle = '#888888';
+        ctx.textAlign = 'center';
+        ctx.fillText(`Member #${member.guild.memberCount} • You are welcome!`, width / 2, height - 30);
+        
+        // Return buffer
+        return canvas.toBuffer();
+        
+    } catch (error) {
+        console.error('Welcome image generation error:', error);
+        return null;
+    }
+}
 
 // ========== HELPER FUNCTIONS ==========
 
@@ -181,24 +306,59 @@ client.on('guildMemberAdd', async (member) => {
             return;
         }
 
+        // Generate welcome image
+        const welcomeImageBuffer = await generateWelcomeImage(member);
+        
+        if (!welcomeImageBuffer) {
+            // Fallback if image generation fails
+            const fallbackEmbed = new EmbedBuilder()
+                .setColor(0x4CAF50)
+                .setTitle('**Welcome to 𝘾𝙅 & 𝙍𝘾𝙎 𝙘𝙧𝙖𝙘𝙠 { }**')
+                .setDescription(
+                    `Welcome ${member.toString()}!\n` +
+                    `You joined the server successfully!\n\n` +
+                    `• Read the rules\n` +
+                    `• Pick your roles\n` +
+                    `• Enjoy the community\n\n` +
+                    `Have fun and make new friends 🎉`
+                )
+                .setImage('https://media.discordapp.net/attachments/1480969775344652470/1496647110525845625/DF7E4FDA-66D3-49FF-BD5E-7C746253AE2D.png')
+                .setFooter({ text: `Member #${member.guild.memberCount} • We're glad to have you!` })
+                .setTimestamp();
+            
+            await welcomeChannel.send({ content: `${member.toString()}`, embeds: [fallbackEmbed] });
+            return;
+        }
+        
+        // Create welcome embed with generated image
         const welcomeEmbed = new EmbedBuilder()
-            .setColor(0x4CAF50)
-            .setTitle('**Welcome to 𝘾𝙅 & 𝙍𝘾𝙎 𝙘𝙧𝙖𝙘𝙠 { }**')
+            .setColor(0xff0000)
+            .setTitle(`🎉 Welcome ${member.user.username}! 🎉`)
             .setDescription(
-                `Welcome ${member.mention}\n` +
-                `You joined the server successfully!\n\n` +
-                `• Read the rules\n` +
-                `• Pick your roles\n` +
-                `• Enjoy the community\n\n` +
-                `Have fun and make new friends 🎉`
+                `✨ **${member.toString()}** has joined the server!\n\n` +
+                `📖 Please read the rules in <#${WELCOME_CHANNEL_ID}>\n` +
+                `🎭 Pick your roles to unlock channels\n` +
+                `💬 Introduce yourself in general chat\n\n` +
+                `**We're now at ${member.guild.memberCount} members!**`
             )
-            .setImage('https://media.discordapp.net/attachments/1480969775344652470/1496647110525845625/DF7E4FDA-66D3-49FF-BD5E-7C746253AE2D.png')
-            .setFooter({ text: `Member #${member.guild.memberCount} • We're glad to have you!` })
+            .setImage('attachment://welcome.png')
+            .setFooter({ text: `ID: ${member.id} • Welcome to the family!` })
             .setTimestamp();
-
-        await welcomeChannel.send({ embeds: [welcomeEmbed] });
+        
+        // Send the welcome message with the generated image
+        await welcomeChannel.send({
+            content: `${member.toString()}`, // This mentions the user clearly
+            embeds: [welcomeEmbed],
+            files: [{
+                attachment: welcomeImageBuffer,
+                name: 'welcome.png'
+            }]
+        });
+        
+        console.log(`✅ Welcome message sent for ${member.user.tag}`);
+        
     } catch (error) {
-        console.error('Welcome message error:', error);
+        console.error('Welcome system error:', error);
     }
 });
 
