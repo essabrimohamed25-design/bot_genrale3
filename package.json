@@ -1,14 +1,14 @@
 {
   "name": "advanced-discord-moderation-bot",
   "version": "1.0.0",
-  "description": "Advanced Discord bot with 25+ commands",
+  "description": "Advanced Discord bot with 25+ commands and simple welcome images",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js"
   },
   "dependencies": {
     "discord.js": "^14.14.1",
-    "canvacord": "^5.4.8",
+    "canvas": "^2.11.2",
     "dotenv": "^16.3.1"
   }
 }
