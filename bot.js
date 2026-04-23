@@ -1,5 +1,6 @@
-const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField, ChannelType } = require('discord.js');
-const canvacord = require('canvacord');
+const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField } = require('discord.js');
+const { createCanvas, loadImage } = require('canvas');
+const path = require('path');
 
 // Load dotenv only for local development
 if (process.env.NODE_ENV !== 'production') {
@@ -153,30 +154,74 @@ function getUptime() {
     return formatDuration(Date.now() - startTime);
 }
 
-// ========== WELCOME IMAGE GENERATOR ==========
+// ========== SIMPLE WELCOME IMAGE GENERATOR ==========
 async function generateWelcomeImage(member) {
     try {
+        // Canvas dimensions
+        const width = 1000;
+        const height = 500;
+        const canvas = createCanvas(width, height);
+        const ctx = canvas.getContext('2d');
+
+        // Load background image
+        const background = await loadImage('https://media.discordapp.net/attachments/1480969775344652470/1496647172148559983/BBCD65E5-E8A2-47BB-80A0-0A208431F3A6.png');
+        ctx.drawImage(background, 0, 0, width, height);
+
+        // Add semi-transparent overlay for better text visibility
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        ctx.fillRect(0, 0, width, height);
+
+        // === AVATAR (Circle in center) ===
+        const avatarSize = 150;
+        const avatarX = width / 2 - avatarSize / 2;
+        const avatarY = height / 2 - 80;
+        
+        // Load user avatar
         const avatarURL = member.user.displayAvatarURL({ extension: 'png', size: 256 });
+        const avatarImage = await loadImage(avatarURL);
         
-        const welcomeCard = new canvacord.Welcomer()
-            .setUsername(member.user.username)
-            .setDiscriminator(member.user.discriminator)
-            .setAvatar(avatarURL)
-            .setMemberCount(member.guild.memberCount)
-            .setGuildName(member.guild.name)
-            .setColor("title", "#ff3333")
-            .setColor("username-box", "#2d0000")
-            .setColor("discriminator-box", "#2d0000")
-            .setColor("message-box", "#1a0000")
-            .setColor("border", "#ff0000")
-            .setColor("avatar", "#ff3333")
-            .setText("title", "WELCOME")
-            .setText("message", `Welcome to ${member.guild.name}`)
-            .setText("member-count", `Member #${member.guild.memberCount}`);
+        // Create circular avatar
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(width / 2, avatarY + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
+        ctx.closePath();
+        ctx.clip();
+        ctx.drawImage(avatarImage, avatarX, avatarY, avatarSize, avatarSize);
+        ctx.restore();
         
-        return await welcomeCard.build();
+        // Add white border around avatar
+        ctx.beginPath();
+        ctx.arc(width / 2, avatarY + avatarSize / 2, avatarSize / 2 + 5, 0, Math.PI * 2);
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 4;
+        ctx.stroke();
+
+        // === USERNAME ===
+        const username = member.user.username;
+        ctx.font = 'bold 42px "Arial"';
+        ctx.fillStyle = '#ffffff';
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+        ctx.shadowBlur = 5;
+        ctx.textAlign = 'center';
+        ctx.fillText(username, width / 2, avatarY + avatarSize + 50);
+
+        // === WELCOME TEXT ===
+        ctx.font = '28px "Arial"';
+        ctx.fillStyle = '#ffcc00';
+        ctx.fillText('Welcome to the server!', width / 2, avatarY + avatarSize + 100);
+
+        // === MEMBER COUNT (Bottom corner) ===
+        ctx.font = '18px "Arial"';
+        ctx.fillStyle = '#cccccc';
+        ctx.fillText(`Member #${member.guild.memberCount}`, width - 20, height - 20);
+        
+        ctx.shadowBlur = 0;
+        
+        // Return the image buffer
+        return canvas.toBuffer();
+        
     } catch (error) {
-        console.error('Welcome image error:', error);
+        console.error('Welcome image generation error:', error);
         return null;
     }
 }
@@ -229,39 +274,62 @@ async function showHelp(message) {
 client.on('guildMemberAdd', async (member) => {
     try {
         const welcomeChannel = client.channels.cache.get(WELCOME_CHANNEL_ID);
-        if (!welcomeChannel) return;
+        if (!welcomeChannel) {
+            console.log(`⚠️ Welcome channel ${WELCOME_CHANNEL_ID} not found!`);
+            return;
+        }
 
+        // Generate welcome image
         const welcomeImage = await generateWelcomeImage(member);
         
-        const welcomeEmbed = new EmbedBuilder()
-            .setColor(0xff3333)
-            .setTitle(`🎉 WELCOME ${member.user.username.toUpperCase()}! 🎉`)
-            .setDescription(
-                `${member.toString()} has joined the server!\n\n` +
-                `✨ **Member #${member.guild.memberCount}**\n\n` +
-                `📖 Please check out the rules\n` +
-                `🎭 Get your roles\n` +
-                `💬 Introduce yourself\n\n` +
-                `**Have an amazing time here! 🚀**`
-            )
-            .setFooter({ text: `ID: ${member.id} • Welcome to the family!` })
-            .setTimestamp();
-        
-        if (welcomeImage) {
-            welcomeEmbed.setImage('attachment://welcome.png');
+        if (!welcomeImage) {
+            // Fallback message without image
+            const fallbackEmbed = new EmbedBuilder()
+                .setColor(0xffcc00)
+                .setTitle(`🎉 Welcome ${member.user.username}! 🎉`)
+                .setDescription(
+                    `${member.toString()}\n\n` +
+                    `Welcome to the server!\n` +
+                    `You are member #${member.guild.memberCount}\n\n` +
+                    `📖 Read the rules\n` +
+                    `🎭 Pick your roles\n` +
+                    `💬 Have fun!\n\n` +
+                    `**Enjoy your stay! 🎉**`
+                )
+                .setThumbnail(member.user.displayAvatarURL())
+                .setTimestamp();
+            
             await welcomeChannel.send({
                 content: member.toString(),
-                embeds: [welcomeEmbed],
-                files: [{ attachment: welcomeImage, name: 'welcome.png' }]
+                embeds: [fallbackEmbed]
             });
-        } else {
-            welcomeEmbed.setThumbnail(member.user.displayAvatarURL());
-            await welcomeChannel.send({ content: member.toString(), embeds: [welcomeEmbed] });
+            
+            console.log(`✅ Fallback welcome message sent for ${member.user.tag}`);
+            return;
         }
         
-        console.log(`✅ Welcome sent for ${member.user.tag}`);
+        // Simple welcome embed
+        const welcomeEmbed = new EmbedBuilder()
+            .setColor(0xffcc00)
+            .setDescription(`${member.toString()} has joined the server!`)
+            .setImage('attachment://welcome.png')
+            .setFooter({ text: `Member #${member.guild.memberCount} • Welcome!` })
+            .setTimestamp();
+        
+        // Send the welcome message with the generated image
+        await welcomeChannel.send({
+            content: `${member.toString()} Welcome! 🎉`,
+            embeds: [welcomeEmbed],
+            files: [{
+                attachment: welcomeImage,
+                name: 'welcome.png'
+            }]
+        });
+        
+        console.log(`✅ Welcome image sent for ${member.user.tag}`);
+        
     } catch (error) {
-        console.error('Welcome error:', error);
+        console.error('❌ Welcome system error:', error);
     }
 });
 
