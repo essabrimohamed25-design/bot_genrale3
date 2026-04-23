@@ -1,7 +1,7 @@
 {
-  "name": "discord-welcome-bot",
+  "name": "advanced-discord-moderation-bot",
   "version": "1.0.0",
-  "description": "Simple Discord welcome bot with Canvacord",
+  "description": "Advanced Discord bot with 25+ commands",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js"
