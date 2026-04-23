@@ -11,6 +11,7 @@ if (process.env.NODE_ENV !== 'production') {
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID;
 const MOD_ROLE_ID = process.env.MOD_ROLE_ID;
+const WELCOME_CHANNEL_ID = process.env.WELCOME_CHANNEL_ID || '1496836534815686836';
 
 // Validation
 if (!BOT_TOKEN) {
@@ -36,8 +37,10 @@ const client = new Client({
     ]
 });
 
-// Helper function to send logs
-async function sendLog(message, action, target, reason) {
+// ========== HELPER FUNCTIONS ==========
+
+// Send log to log channel
+async function sendLog(message, action, target, reason, duration = null) {
     try {
         const logChannel = client.channels.cache.get(LOG_CHANNEL_ID);
         if (!logChannel) {
@@ -52,10 +55,14 @@ async function sendLog(message, action, target, reason) {
             .addFields(
                 { name: '👮 Executor', value: `${message.author.tag} (${message.author.id})`, inline: true },
                 { name: '🎯 Target', value: `${target.user?.tag || target.tag} (${target.id})`, inline: true },
-                { name: '📝 Reason', value: reason, inline: false },
+                { name: '📝 Reason', value: reason || 'No reason provided', inline: false },
                 { name: '📍 Channel', value: `<#${message.channel.id}>`, inline: true }
             )
             .setTimestamp();
+
+        if (duration) {
+            logEmbed.addFields({ name: '⏱️ Duration', value: duration, inline: true });
+        }
 
         await logChannel.send({ embeds: [logEmbed] });
     } catch (error) {
@@ -63,7 +70,7 @@ async function sendLog(message, action, target, reason) {
     }
 }
 
-// Helper function to send success message
+// Send success message
 async function sendSuccess(message, action, target, duration = null) {
     const embed = new EmbedBuilder()
         .setColor(0x4CAF50)
@@ -82,7 +89,7 @@ async function sendSuccess(message, action, target, duration = null) {
     await message.reply({ embeds: [embed] });
 }
 
-// Helper function to send error message
+// Send error message
 async function sendError(message, errorText) {
     const embed = new EmbedBuilder()
         .setColor(0xFF0000)
@@ -135,7 +142,7 @@ async function getTarget(message, userId) {
     }
 }
 
-// Help command
+// ========== HELP COMMAND ==========
 async function showHelp(message) {
     const embed = new EmbedBuilder()
         .setColor(0x5865F2)
@@ -146,7 +153,7 @@ async function showHelp(message) {
             { name: '🛠️ MODERATION', value: '```\n' +
                 '!ban <userID> [reason] - Permanently ban a user\n' +
                 '!kick <userID> [reason] - Kick a user from the server\n' +
-                '!timeout <userID> <time> [reason] - Same as mute\n' +
+                '!mute <userID> <time> [reason] - Timeout a user (10m/1h/1d)\n' +
                 '!unmute <userID> [reason] - Remove timeout from user\n' +
                 '!clear <amount> - Delete messages (1-100)\n' +
                 '!warn <userID> [reason] - Send a warning to user\n' +
@@ -165,14 +172,37 @@ async function showHelp(message) {
     await message.reply({ embeds: [embed] });
 }
 
-client.once('ready', () => {
-    console.log(`✅ Logged in as ${client.user.tag}`);
-    console.log(`📝 Log channel: ${LOG_CHANNEL_ID}`);
-    console.log(`👮 Mod role: ${MOD_ROLE_ID}`);
-    console.log(`🚀 Bot is ready!`);
-    console.log(`💡 Commands work in ANY channel`);
+// ========== WELCOME SYSTEM ==========
+client.on('guildMemberAdd', async (member) => {
+    try {
+        const welcomeChannel = client.channels.cache.get(WELCOME_CHANNEL_ID);
+        if (!welcomeChannel) {
+            console.log('⚠️ Welcome channel not found');
+            return;
+        }
+
+        const welcomeEmbed = new EmbedBuilder()
+            .setColor(0x4CAF50)
+            .setTitle('**Welcome to 𝘾𝙅 & 𝙍𝘾𝙎 𝙘𝙧𝙖𝙘𝙠 { }**')
+            .setDescription(
+                `Welcome ${member.mention}\n` +
+                `You joined the server successfully!\n\n` +
+                `• Read the rules\n` +
+                `• Pick your roles\n` +
+                `• Enjoy the community\n\n` +
+                `Have fun and make new friends 🎉`
+            )
+            .setImage('https://media.discordapp.net/attachments/1480969775344652470/1496647110525845625/DF7E4FDA-66D3-49FF-BD5E-7C746253AE2D.png')
+            .setFooter({ text: `Member #${member.guild.memberCount} • We're glad to have you!` })
+            .setTimestamp();
+
+        await welcomeChannel.send({ embeds: [welcomeEmbed] });
+    } catch (error) {
+        console.error('Welcome message error:', error);
+    }
 });
 
+// ========== COMMAND HANDLER ==========
 client.on('messageCreate', async (message) => {
     // Ignore bots
     if (message.author.bot) return;
@@ -189,8 +219,8 @@ client.on('messageCreate', async (message) => {
         return showHelp(message);
     }
     
-    // Check mod permission for all other commands
-    const moderationCommands = ['ban', 'kick', 'mute', 'timeout', 'unmute', 'clear', 'warn'];
+    // Check mod permission for moderation commands
+    const moderationCommands = ['ban', 'kick', 'mute', 'unmute', 'clear', 'warn'];
     if (moderationCommands.includes(command) && !hasModPermission(message.member)) {
         return sendError(message, `You need the <@&${MOD_ROLE_ID}> role to use moderation commands!`);
     }
@@ -246,7 +276,7 @@ client.on('messageCreate', async (message) => {
     }
     
     // ========== MUTE/TIMEOUT COMMAND ==========
-    else if (command === 'mute' || command === 'timeout') {
+    else if (command === 'mute') {
         const userId = args[0];
         const timeAmount = args[1];
         
@@ -279,11 +309,11 @@ client.on('messageCreate', async (message) => {
         
         try {
             await target.timeout(durationMs, `${reason} (Timed out by ${message.author.tag})`);
-            await sendSuccess(message, `Timeout (${durationReadable})`, target, durationReadable);
-            await sendLog(message, `Timeout (${durationReadable})`, target, reason);
+            await sendSuccess(message, `Mute (${durationReadable})`, target, durationReadable);
+            await sendLog(message, 'Mute', target, reason, durationReadable);
         } catch (error) {
             console.error(error);
-            return sendError(message, 'Failed to timeout user. Check my permissions!');
+            return sendError(message, 'Failed to mute user. Check my permissions!');
         }
     }
     
@@ -304,7 +334,7 @@ client.on('messageCreate', async (message) => {
         }
         
         if (!target.communicationDisabledUntil) {
-            return sendError(message, 'This user is not currently timed out!');
+            return sendError(message, 'This user is not currently muted!');
         }
         
         const reason = args.slice(1).join(' ') || 'No reason provided';
@@ -440,9 +470,9 @@ client.on('messageCreate', async (message) => {
             );
         
         if (member.communicationDisabledUntil) {
-            embed.addFields({ name: '🔇 Timed out until', value: `<t:${Math.floor(member.communicationDisabledUntil / 1000)}:R>`, inline: false });
+            embed.addFields({ name: '🔇 Muted until', value: `<t:${Math.floor(member.communicationDisabledUntil / 1000)}:R>`, inline: false });
         } else {
-            embed.addFields({ name: '🔇 Timeout', value: 'Not timed out', inline: false });
+            embed.addFields({ name: '🔇 Muted', value: 'Not muted', inline: false });
         }
         
         embed.setTimestamp();
@@ -464,88 +494,20 @@ client.on('messageCreate', async (message) => {
     }
 });
 
-// Error handling
-process.on('unhandledRejection', (error) => {
-    console.error('Unhandled promise rejection:', error);
+// ========== READY EVENT ==========
+client.once('ready', () => {
+    console.log(`✅ Logged in as ${client.user.tag}`);
+    console.log(`📝 Log channel: ${LOG_CHANNEL_ID}`);
+    console.log(`👮 Mod role: ${MOD_ROLE_ID}`);
+    console.log(`👋 Welcome channel: ${WELCOME_CHANNEL_ID}`);
+    console.log(`🚀 Bot is ready!`);
+    console.log(`💡 Commands work in ANY channel`);
 });
 
-// Login
+// ========== ERROR HANDLING ==========
+process.on('unhandledRejection', (error) => {
+    console.error('❌ Unhandled promise rejection:', error);
+});
+
+// ========== START BOT ==========
 client.login(BOT_TOKEN);
-import discord
-from discord.ext import commands
-import random
-import os
-
-# ===== BOT SETUP =====
-intents = discord.Intents.default()
-intents.message_content = True
-intents.members = True
-
-bot = commands.Bot(command_prefix='!', intents=intents)
-
-# ===== 8BALL RESPONSES =====
-responses = [
-    "It is certain.",
-    "Without a doubt.",
-    "Yes definitely.",
-    "Most likely.",
-    "Outlook good.",
-    "Yes.",
-    "Reply hazy, try again.",
-    "Ask again later.",
-    "Cannot predict now.",
-    "Don't count on it.",
-    "My reply is no.",
-    "Very doubtful."
-]
-
-# ===== READY EVENT =====
-@bot.event
-async def on_ready():
-    print(f"✅ Logged in as {bot.user}")
-
-# ===== 8BALL COMMAND =====
-@bot.command(name='8ball')
-async def eight_ball(ctx, *, question: str):
-    response = random.choice(responses)
-
-    embed = discord.Embed(
-        title="🎱 Magic 8Ball",
-        description=f"**Question:** {question}\n**Answer:** {response}",
-        color=discord.Color.purple()
-    )
-
-    await ctx.send(embed=embed)
-
-# ===== WELCOME SYSTEM =====
-@bot.event
-async def on_member_join(member):
-    channel = bot.get_channel(1496836534815686836)
-
-    if not channel:
-        print("❌ Channel not found")
-        return
-
-    embed = discord.Embed(
-        title="🔥 Welcome to 𝘾𝙅 & 𝙍𝘾𝙎 𝙘𝙧𝙖𝙘𝙠 { }",
-        description=(
-            f"✨ Welcome {member.mention}!\n\n"
-            f"You joined **{member.guild.name}** successfully\n\n"
-            f"🔹 Read the rules\n"
-            f"🔹 Pick your roles\n"
-            f"🔹 Enjoy the community\n\n"
-            f"🎉 Have fun and make new friends!"
-        ),
-        color=discord.Color.green()
-    )
-
-    embed.set_image(url="https://media.discordapp.net/attachments/1480969775344652470/1496647110525845625/DF7E4FDA-66D3-49FF-BD5E-7C746253AE2D.png")
-
-    embed.set_footer(
-        text=f"Member #{len(member.guild.members)} • Welcome!"
-    )
-
-    await channel.send(embed=embed)
-
-# ===== RUN BOT (FROM ENV) =====
-bot.run(os.getenv("BOT_TOKEN"))
