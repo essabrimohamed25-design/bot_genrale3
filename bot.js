@@ -1,6 +1,4 @@
 const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField } = require('discord.js');
-const { createCanvas, loadImage } = require('canvas');
-const path = require('path');
 
 // Load dotenv only for local development
 if (process.env.NODE_ENV !== 'production') {
@@ -11,13 +9,17 @@ if (process.env.NODE_ENV !== 'production') {
 
 // Environment variables
 const BOT_TOKEN = process.env.BOT_TOKEN;
+const WELCOME_CHANNEL_ID = process.env.WELCOME_CHANNEL_ID;
 const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID;
 const MOD_ROLE_ID = process.env.MOD_ROLE_ID;
-const WELCOME_CHANNEL_ID = process.env.WELCOME_CHANNEL_ID;
 
 // Validation
 if (!BOT_TOKEN) {
     console.error('❌ BOT_TOKEN is missing!');
+    process.exit(1);
+}
+if (!WELCOME_CHANNEL_ID) {
+    console.error('❌ WELCOME_CHANNEL_ID is missing!');
     process.exit(1);
 }
 if (!LOG_CHANNEL_ID) {
@@ -26,10 +28,6 @@ if (!LOG_CHANNEL_ID) {
 }
 if (!MOD_ROLE_ID) {
     console.error('❌ MOD_ROLE_ID is missing!');
-    process.exit(1);
-}
-if (!WELCOME_CHANNEL_ID) {
-    console.error('❌ WELCOME_CHANNEL_ID is missing!');
     process.exit(1);
 }
 
@@ -43,13 +41,13 @@ const client = new Client({
     ]
 });
 
-// ========== START TIME FOR UPTIME ==========
+// ========== START TIME ==========
 const startTime = Date.now();
 
 // ========== HELPER FUNCTIONS ==========
 
 // Send log to log channel
-async function sendLog(message, action, target, reason, details = null) {
+async function sendLog(message, action, target, reason) {
     try {
         const logChannel = client.channels.cache.get(LOG_CHANNEL_ID);
         if (!logChannel) return;
@@ -65,10 +63,6 @@ async function sendLog(message, action, target, reason, details = null) {
                 { name: '📍 Channel', value: `<#${message.channel.id}>`, inline: true }
             )
             .setTimestamp();
-
-        if (details) {
-            logEmbed.addFields({ name: 'ℹ️ Details', value: details, inline: false });
-        }
 
         await logChannel.send({ embeds: [logEmbed] });
     } catch (error) {
@@ -127,17 +121,16 @@ function parseTime(timeString) {
     }
 }
 
-// Format milliseconds to readable string
+// Format milliseconds
 function formatDuration(ms) {
-    const seconds = Math.floor(ms / 1000);
-    const minutes = Math.floor(seconds / 60);
+    const minutes = Math.floor(ms / 60000);
     const hours = Math.floor(minutes / 60);
     const days = Math.floor(hours / 24);
     
-    if (days > 0) return `${days} day(s) ${hours % 24} hour(s)`;
-    if (hours > 0) return `${hours} hour(s) ${minutes % 60} minute(s)`;
-    if (minutes > 0) return `${minutes} minute(s) ${seconds % 60} second(s)`;
-    return `${seconds} second(s)`;
+    if (days > 0) return `${days} day(s)`;
+    if (hours > 0) return `${hours} hour(s)`;
+    if (minutes > 0) return `${minutes} minute(s)`;
+    return 'unknown';
 }
 
 // Get target user
@@ -149,88 +142,11 @@ async function getTarget(message, userId) {
     }
 }
 
-// Format uptime
-function getUptime() {
-    return formatDuration(Date.now() - startTime);
-}
-
-// ========== SIMPLE WELCOME IMAGE GENERATOR ==========
-async function generateWelcomeImage(member) {
-    try {
-        // Canvas dimensions
-        const width = 1000;
-        const height = 500;
-        const canvas = createCanvas(width, height);
-        const ctx = canvas.getContext('2d');
-
-        // Load background image
-        const background = await loadImage('https://media.discordapp.net/attachments/1480969775344652470/1496647172148559983/BBCD65E5-E8A2-47BB-80A0-0A208431F3A6.png');
-        ctx.drawImage(background, 0, 0, width, height);
-
-        // Add semi-transparent overlay for better text visibility
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-        ctx.fillRect(0, 0, width, height);
-
-        // === AVATAR (Circle in center) ===
-        const avatarSize = 150;
-        const avatarX = width / 2 - avatarSize / 2;
-        const avatarY = height / 2 - 80;
-        
-        // Load user avatar
-        const avatarURL = member.user.displayAvatarURL({ extension: 'png', size: 256 });
-        const avatarImage = await loadImage(avatarURL);
-        
-        // Create circular avatar
-        ctx.save();
-        ctx.beginPath();
-        ctx.arc(width / 2, avatarY + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
-        ctx.closePath();
-        ctx.clip();
-        ctx.drawImage(avatarImage, avatarX, avatarY, avatarSize, avatarSize);
-        ctx.restore();
-        
-        // Add white border around avatar
-        ctx.beginPath();
-        ctx.arc(width / 2, avatarY + avatarSize / 2, avatarSize / 2 + 5, 0, Math.PI * 2);
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 4;
-        ctx.stroke();
-
-        // === USERNAME ===
-        const username = member.user.username;
-        ctx.font = 'bold 42px "Arial"';
-        ctx.fillStyle = '#ffffff';
-        ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
-        ctx.shadowBlur = 5;
-        ctx.textAlign = 'center';
-        ctx.fillText(username, width / 2, avatarY + avatarSize + 50);
-
-        // === WELCOME TEXT ===
-        ctx.font = '28px "Arial"';
-        ctx.fillStyle = '#ffcc00';
-        ctx.fillText('Welcome to the server!', width / 2, avatarY + avatarSize + 100);
-
-        // === MEMBER COUNT (Bottom corner) ===
-        ctx.font = '18px "Arial"';
-        ctx.fillStyle = '#cccccc';
-        ctx.fillText(`Member #${member.guild.memberCount}`, width - 20, height - 20);
-        
-        ctx.shadowBlur = 0;
-        
-        // Return the image buffer
-        return canvas.toBuffer();
-        
-    } catch (error) {
-        console.error('Welcome image generation error:', error);
-        return null;
-    }
-}
-
 // ========== HELP COMMAND ==========
 async function showHelp(message) {
     const embed = new EmbedBuilder()
         .setColor(0x5865F2)
-        .setTitle('🛡️ Advanced Moderation Bot - Help Panel')
+        .setTitle('🛡️ Moderation Bot - Help Panel')
         .setDescription('Here are all available commands:')
         .setThumbnail(message.guild.iconURL())
         .addFields(
@@ -241,30 +157,17 @@ async function showHelp(message) {
                 '!unmute <userID> [reason] - Remove timeout from user\n' +
                 '!clear <amount> - Delete messages (1-100)\n' +
                 '!warn <userID> [reason] - Send a warning to user\n' +
-                '!lock - Lock the current channel\n' +
-                '!unlock - Unlock the current channel\n' +
-                '!slowmode <seconds> - Set slowmode (0 to disable)\n' +
-                '!nick <userID> <nickname> - Change user nickname\n' +
-                '!addrole <userID> <roleID> - Add role to user\n' +
-                '!removerole <userID> <roleID> - Remove role from user\n' +
-                '```', inline: false },
-            { name: '📢 UTILITY', value: '```\n' +
-                '!say <message> - Make the bot say something\n' +
-                '!embed <title> | <description> - Send an embed message\n' +
-                '!announce <message> - Send an announcement\n' +
                 '```', inline: false },
             { name: 'ℹ️ INFORMATION', value: '```\n' +
                 '!ping - Check bot latency\n' +
                 '!avatar [userID] - Show user avatar\n' +
                 '!userinfo [userID] - Show user information\n' +
                 '!serverinfo - Show server information\n' +
-                '!roleinfo <roleID> - Show role information\n' +
-                '!botinfo - Show bot information\n' +
-                '!uptime - Show bot uptime\n' +
+                '!say <message> - Make the bot say something\n' +
                 '!help - Show this help panel\n' +
                 '```', inline: false }
         )
-        .setFooter({ text: `⚠️ Moderation commands require <@&${MOD_ROLE_ID}> role | Total Commands: 25+` })
+        .setFooter({ text: `⚠️ Moderation commands require <@&${MOD_ROLE_ID}> role` })
         .setTimestamp();
 
     await message.reply({ embeds: [embed] });
@@ -275,61 +178,36 @@ client.on('guildMemberAdd', async (member) => {
     try {
         const welcomeChannel = client.channels.cache.get(WELCOME_CHANNEL_ID);
         if (!welcomeChannel) {
-            console.log(`⚠️ Welcome channel ${WELCOME_CHANNEL_ID} not found!`);
+            console.log('⚠️ Welcome channel not found');
             return;
         }
 
-        // Generate welcome image
-        const welcomeImage = await generateWelcomeImage(member);
-        
-        if (!welcomeImage) {
-            // Fallback message without image
-            const fallbackEmbed = new EmbedBuilder()
-                .setColor(0xffcc00)
-                .setTitle(`🎉 Welcome ${member.user.username}! 🎉`)
-                .setDescription(
-                    `${member.toString()}\n\n` +
-                    `Welcome to the server!\n` +
-                    `You are member #${member.guild.memberCount}\n\n` +
-                    `📖 Read the rules\n` +
-                    `🎭 Pick your roles\n` +
-                    `💬 Have fun!\n\n` +
-                    `**Enjoy your stay! 🎉**`
-                )
-                .setThumbnail(member.user.displayAvatarURL())
-                .setTimestamp();
-            
-            await welcomeChannel.send({
-                content: member.toString(),
-                embeds: [fallbackEmbed]
-            });
-            
-            console.log(`✅ Fallback welcome message sent for ${member.user.tag}`);
-            return;
-        }
-        
-        // Simple welcome embed
         const welcomeEmbed = new EmbedBuilder()
-            .setColor(0xffcc00)
-            .setDescription(`${member.toString()} has joined the server!`)
-            .setImage('attachment://welcome.png')
-            .setFooter({ text: `Member #${member.guild.memberCount} • Welcome!` })
+            .setColor(0x4CAF50)
+            .setTitle(`🎉 Welcome to ${member.guild.name}! 🎉`)
+            .setDescription(
+                `${member.toString()} has joined the server!\n\n` +
+                `**Username:** ${member.user.username}\n` +
+                `**User ID:** ${member.id}\n\n` +
+                `✨ You are member #${member.guild.memberCount}\n\n` +
+                `📖 Please read the rules\n` +
+                `🎭 Pick your roles\n` +
+                `💬 Introduce yourself\n\n` +
+                `**Have fun and make new friends! 🎉**`
+            )
+            .setThumbnail(member.user.displayAvatarURL({ size: 1024, dynamic: true }))
+            .setImage('https://media.discordapp.net/attachments/1480969775344652470/1496647172148559983/BBCD65E5-E8A2-47BB-80A0-0A208431F3A6.png')
+            .setFooter({ text: `ID: ${member.id} • Welcome!` })
             .setTimestamp();
-        
-        // Send the welcome message with the generated image
-        await welcomeChannel.send({
-            content: `${member.toString()} Welcome! 🎉`,
-            embeds: [welcomeEmbed],
-            files: [{
-                attachment: welcomeImage,
-                name: 'welcome.png'
-            }]
+
+        await welcomeChannel.send({ 
+            content: `${member.toString()}`, 
+            embeds: [welcomeEmbed] 
         });
         
-        console.log(`✅ Welcome image sent for ${member.user.tag}`);
-        
+        console.log(`✅ Welcome message sent for ${member.user.tag}`);
     } catch (error) {
-        console.error('❌ Welcome system error:', error);
+        console.error('Welcome error:', error);
     }
 });
 
@@ -345,9 +223,9 @@ client.on('messageCreate', async (message) => {
     if (command === 'help') return showHelp(message);
     
     // Check mod permission for moderation commands
-    const modCommands = ['ban', 'kick', 'timeout', 'unmute', 'clear', 'warn', 'lock', 'unlock', 'slowmode', 'nick', 'addrole', 'removerole'];
+    const modCommands = ['ban', 'kick', 'timeout', 'unmute', 'clear', 'warn'];
     if (modCommands.includes(command) && !hasModPermission(message.member)) {
-        return sendError(message, `You need the <@&${MOD_ROLE_ID}> role to use this command!`);
+        return sendError(message, `You need the <@&${MOD_ROLE_ID}> role to use moderation commands!`);
     }
     
     // ========== BAN ==========
@@ -413,7 +291,7 @@ client.on('messageCreate', async (message) => {
         try {
             await target.timeout(durationMs, `${reason} (Timed out by ${message.author.tag})`);
             await sendSuccess(message, `Timeout (${durationReadable})`, target, durationReadable);
-            await sendLog(message, 'Timeout', target, reason, durationReadable);
+            await sendLog(message, 'Timeout', target, reason);
         } catch (error) {
             sendError(message, 'Failed to timeout user.');
         }
@@ -490,143 +368,6 @@ client.on('messageCreate', async (message) => {
         }
     }
     
-    // ========== LOCK ==========
-    else if (command === 'lock') {
-        try {
-            await message.channel.permissionOverwrites.edit(message.guild.id, {
-                SendMessages: false
-            });
-            const embed = new EmbedBuilder().setColor(0xFF0000).setTitle('🔒 Channel Locked').setDescription(`This channel has been locked by ${message.author.tag}`).setTimestamp();
-            await message.reply({ embeds: [embed] });
-            await sendLog(message, 'Lock', { id: message.channel.id, tag: message.channel.name }, 'Channel locked');
-        } catch (error) {
-            sendError(message, 'Failed to lock channel. Check my permissions!');
-        }
-    }
-    
-    // ========== UNLOCK ==========
-    else if (command === 'unlock') {
-        try {
-            await message.channel.permissionOverwrites.edit(message.guild.id, {
-                SendMessages: null
-            });
-            const embed = new EmbedBuilder().setColor(0x00FF00).setTitle('🔓 Channel Unlocked').setDescription(`This channel has been unlocked by ${message.author.tag}`).setTimestamp();
-            await message.reply({ embeds: [embed] });
-            await sendLog(message, 'Unlock', { id: message.channel.id, tag: message.channel.name }, 'Channel unlocked');
-        } catch (error) {
-            sendError(message, 'Failed to unlock channel.');
-        }
-    }
-    
-    // ========== SLOWMODE ==========
-    else if (command === 'slowmode') {
-        const seconds = parseInt(args[0]);
-        if (isNaN(seconds)) return sendError(message, 'Usage: `!slowmode <seconds>` (0 to disable)');
-        
-        try {
-            await message.channel.setRateLimitPerUser(seconds);
-            const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('⏱️ Slowmode Updated').setDescription(`Slowmode set to ${seconds} seconds`).setTimestamp();
-            await message.reply({ embeds: [embed] });
-            await sendLog(message, 'Slowmode', { id: message.channel.id, tag: message.channel.name }, `Set to ${seconds} seconds`);
-        } catch (error) {
-            sendError(message, 'Failed to set slowmode.');
-        }
-    }
-    
-    // ========== NICK ==========
-    else if (command === 'nick') {
-        const userId = args[0];
-        const nickname = args.slice(1).join(' ');
-        if (!userId || !nickname) return sendError(message, 'Usage: `!nick <userID> <nickname>`');
-        
-        const target = await getTarget(message, userId);
-        if (!target) return sendError(message, 'User not found!');
-        
-        try {
-            await target.setNickname(nickname);
-            const embed = new EmbedBuilder().setColor(0x4CAF50).setTitle('✅ Nickname Changed').setDescription(`Changed ${target.user.tag}'s nickname to ${nickname}`).setTimestamp();
-            await message.reply({ embeds: [embed] });
-            await sendLog(message, 'Nickname Change', target, `New nickname: ${nickname}`);
-        } catch (error) {
-            sendError(message, 'Failed to change nickname. I may not have permission or the user is higher than me.');
-        }
-    }
-    
-    // ========== ADDROLE ==========
-    else if (command === 'addrole') {
-        const userId = args[0];
-        const roleId = args[1];
-        if (!userId || !roleId) return sendError(message, 'Usage: `!addrole <userID> <roleID>`');
-        
-        const target = await getTarget(message, userId);
-        if (!target) return sendError(message, 'User not found!');
-        
-        const role = message.guild.roles.cache.get(roleId);
-        if (!role) return sendError(message, 'Role not found!');
-        
-        try {
-            await target.roles.add(role);
-            const embed = new EmbedBuilder().setColor(0x4CAF50).setTitle('✅ Role Added').setDescription(`Added ${role.name} to ${target.user.tag}`).setTimestamp();
-            await message.reply({ embeds: [embed] });
-            await sendLog(message, 'Add Role', target, `Role: ${role.name} (${role.id})`);
-        } catch (error) {
-            sendError(message, 'Failed to add role.');
-        }
-    }
-    
-    // ========== REMOVEROLE ==========
-    else if (command === 'removerole') {
-        const userId = args[0];
-        const roleId = args[1];
-        if (!userId || !roleId) return sendError(message, 'Usage: `!removerole <userID> <roleID>`');
-        
-        const target = await getTarget(message, userId);
-        if (!target) return sendError(message, 'User not found!');
-        
-        const role = message.guild.roles.cache.get(roleId);
-        if (!role) return sendError(message, 'Role not found!');
-        
-        try {
-            await target.roles.remove(role);
-            const embed = new EmbedBuilder().setColor(0x4CAF50).setTitle('✅ Role Removed').setDescription(`Removed ${role.name} from ${target.user.tag}`).setTimestamp();
-            await message.reply({ embeds: [embed] });
-            await sendLog(message, 'Remove Role', target, `Role: ${role.name} (${role.id})`);
-        } catch (error) {
-            sendError(message, 'Failed to remove role.');
-        }
-    }
-    
-    // ========== SAY ==========
-    else if (command === 'say') {
-        const text = args.join(' ');
-        if (!text) return sendError(message, 'Usage: `!say <message>`');
-        await message.channel.send(text);
-        await message.delete();
-    }
-    
-    // ========== EMBED ==========
-    else if (command === 'embed') {
-        const text = args.join(' ');
-        if (!text) return sendError(message, 'Usage: `!embed <title> | <description>`');
-        
-        const [title, description] = text.split('|').map(s => s.trim());
-        if (!title || !description) return sendError(message, 'Usage: `!embed <title> | <description>`');
-        
-        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(title).setDescription(description).setTimestamp();
-        await message.channel.send({ embeds: [embed] });
-        await message.delete();
-    }
-    
-    // ========== ANNOUNCE ==========
-    else if (command === 'announce') {
-        const text = args.join(' ');
-        if (!text) return sendError(message, 'Usage: `!announce <message>`');
-        
-        const embed = new EmbedBuilder().setColor(0xFF0000).setTitle('📢 ANNOUNCEMENT').setDescription(text).setFooter({ text: `Announced by ${message.author.tag}` }).setTimestamp();
-        await message.channel.send({ embeds: [embed] });
-        await message.delete();
-    }
-    
     // ========== PING ==========
     else if (command === 'ping') {
         const embed = new EmbedBuilder()
@@ -677,8 +418,7 @@ client.on('messageCreate', async (message) => {
             .addFields(
                 { name: '🆔 ID', value: member.id, inline: true },
                 { name: '📅 Joined Server', value: `<t:${Math.floor(member.joinedTimestamp / 1000)}:R>`, inline: true },
-                { name: '📅 Joined Discord', value: `<t:${Math.floor(member.user.createdTimestamp / 1000)}:R>`, inline: true },
-                { name: '🎭 Roles', value: member.roles.cache.map(r => r.name).join(', ').slice(0, 1024) || 'None', inline: false }
+                { name: '📅 Joined Discord', value: `<t:${Math.floor(member.user.createdTimestamp / 1000)}:R>`, inline: true }
             );
         
         if (member.communicationDisabledUntil) {
@@ -701,75 +441,29 @@ client.on('messageCreate', async (message) => {
                 { name: '👥 Members', value: `${guild.memberCount}`, inline: true },
                 { name: '📅 Created', value: `<t:${Math.floor(guild.createdTimestamp / 1000)}:R>`, inline: true },
                 { name: '💬 Channels', value: `${guild.channels.cache.size}`, inline: true },
-                { name: '🎭 Roles', value: `${guild.roles.cache.size}`, inline: true },
-                { name: '✅ Boosts', value: `${guild.premiumSubscriptionCount || 0}`, inline: true }
+                { name: '🎭 Roles', value: `${guild.roles.cache.size}`, inline: true }
             )
             .setTimestamp();
         await message.reply({ embeds: [embed] });
     }
     
-    // ========== ROLEINFO ==========
-    else if (command === 'roleinfo') {
-        const roleId = args[0];
-        if (!roleId) return sendError(message, 'Usage: `!roleinfo <roleID>`');
-        
-        const role = message.guild.roles.cache.get(roleId);
-        if (!role) return sendError(message, 'Role not found!');
-        
-        const embed = new EmbedBuilder()
-            .setColor(role.color)
-            .setTitle(`Role Information: ${role.name}`)
-            .addFields(
-                { name: '🆔 ID', value: role.id, inline: true },
-                { name: '🎨 Color', value: role.hexColor, inline: true },
-                { name: '📅 Created', value: `<t:${Math.floor(role.createdTimestamp / 1000)}:R>`, inline: true },
-                { name: '👥 Members', value: `${role.members.size}`, inline: true },
-                { name: '🔝 Position', value: `${role.position}`, inline: true },
-                { name: '📌 Mentionable', value: role.mentionable ? 'Yes' : 'No', inline: true }
-            )
-            .setTimestamp();
-        await message.reply({ embeds: [embed] });
-    }
-    
-    // ========== BOTINFO ==========
-    else if (command === 'botinfo') {
-        const embed = new EmbedBuilder()
-            .setColor(0x5865F2)
-            .setTitle('🤖 Bot Information')
-            .setThumbnail(client.user.displayAvatarURL())
-            .addFields(
-                { name: '📛 Name', value: client.user.tag, inline: true },
-                { name: '🆔 ID', value: client.user.id, inline: true },
-                { name: '📅 Created', value: `<t:${Math.floor(client.user.createdTimestamp / 1000)}:R>`, inline: true },
-                { name: '💻 Servers', value: `${client.guilds.cache.size}`, inline: true },
-                { name: '👥 Users', value: `${client.users.cache.size}`, inline: true },
-                { name: '📚 Commands', value: '25+', inline: true },
-                { name: '🟢 Status', value: 'Online', inline: true },
-                { name: '📦 Node.js', value: process.version, inline: true },
-                { name: '🤖 Discord.js', value: 'v14', inline: true }
-            )
-            .setTimestamp();
-        await message.reply({ embeds: [embed] });
-    }
-    
-    // ========== UPTIME ==========
-    else if (command === 'uptime') {
-        const embed = new EmbedBuilder()
-            .setColor(0x5865F2)
-            .setTitle('⏱️ Bot Uptime')
-            .setDescription(`I have been online for **${getUptime()}**`)
-            .setTimestamp();
-        await message.reply({ embeds: [embed] });
+    // ========== SAY ==========
+    else if (command === 'say') {
+        const text = args.join(' ');
+        if (!text) return sendError(message, 'Usage: `!say <message>`');
+        await message.channel.send(text);
+        await message.delete();
     }
 });
 
 // ========== READY EVENT ==========
 client.once('ready', () => {
     console.log(`✅ Logged in as ${client.user.tag}`);
+    console.log(`👋 Welcome channel: ${WELCOME_CHANNEL_ID}`);
     console.log(`📝 Log channel: ${LOG_CHANNEL_ID}`);
     console.log(`👮 Mod role: ${MOD_ROLE_ID}`);
-    console.log(`👋 Welcome channel: ${WELCOME_CHANNEL_ID}`);
-    console.log(`🚀 Bot is ready with 25+ commands!`);
+    console.log(`🚀 Bot is ready with 12+ commands!`);
+    console.log(`💡 Commands work in ANY channel`);
 });
 
 // ========== ERROR HANDLING ==========
