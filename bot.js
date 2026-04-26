@@ -1,57 +1,196 @@
-const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField, ChannelType } = require('discord.js');
+const { joinVoiceChannel, getVoiceConnection, VoiceConnectionStatus, entersState } = require('@discordjs/voice');
 
-// Load dotenv only for local development
+// ============================================
+// ENVIRONMENT VARIABLES
+// ============================================
 if (process.env.NODE_ENV !== 'production') {
-    try {
-        require('dotenv').config();
-    } catch (error) {}
+    try { require('dotenv').config(); } catch (error) {}
 }
 
-// Environment variables
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const WELCOME_CHANNEL_ID = process.env.WELCOME_CHANNEL_ID;
 const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID;
 const MOD_ROLE_ID = process.env.MOD_ROLE_ID;
+const VOICE_CHANNEL_ID = process.env.VOICE_CHANNEL_ID || "1485406556542472322";
 
 // Validation
-if (!BOT_TOKEN) {
-    console.error('❌ BOT_TOKEN is missing!');
-    process.exit(1);
-}
-if (!WELCOME_CHANNEL_ID) {
-    console.error('❌ WELCOME_CHANNEL_ID is missing!');
-    process.exit(1);
-}
-if (!LOG_CHANNEL_ID) {
-    console.error('❌ LOG_CHANNEL_ID is missing!');
-    process.exit(1);
-}
-if (!MOD_ROLE_ID) {
-    console.error('❌ MOD_ROLE_ID is missing!');
-    process.exit(1);
-}
+if (!BOT_TOKEN) { console.error('❌ BOT_TOKEN is missing!'); process.exit(1); }
+if (!WELCOME_CHANNEL_ID) { console.error('❌ WELCOME_CHANNEL_ID is missing!'); process.exit(1); }
+if (!LOG_CHANNEL_ID) { console.error('❌ LOG_CHANNEL_ID is missing!'); process.exit(1); }
+if (!MOD_ROLE_ID) { console.error('❌ MOD_ROLE_ID is missing!'); process.exit(1); }
 
+// ============================================
+// CLIENT INITIALIZATION
+// ============================================
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.GuildMembers,
-        GatewayIntentBits.GuildModeration
+        GatewayIntentBits.GuildModeration,
+        GatewayIntentBits.GuildVoiceStates
     ]
 });
 
-// ========== START TIME ==========
 const startTime = Date.now();
+let currentVoiceConnection = null;
+let reconnectTimeout = null;
 
-// ========== HELPER FUNCTIONS ==========
+// ============================================
+// VOICE CHANNEL MANAGEMENT (Using @discordjs/voice)
+// ============================================
+async function joinVoiceChannelProper() {
+    if (!VOICE_CHANNEL_ID) {
+        console.log('⚠️ No VOICE_CHANNEL_ID configured, skipping voice join');
+        return;
+    }
 
-// Send log to log channel
+    try {
+        const guild = client.guilds.cache.first();
+        if (!guild) {
+            console.log('⚠️ No guild found, waiting for ready event');
+            return;
+        }
+
+        const voiceChannel = guild.channels.cache.get(VOICE_CHANNEL_ID);
+        if (!voiceChannel) {
+            console.log(`⚠️ Voice channel ${VOICE_CHANNEL_ID} not found`);
+            return;
+        }
+
+        if (voiceChannel.type !== ChannelType.GuildVoice) {
+            console.log(`⚠️ Channel ${VOICE_CHANNEL_ID} is not a voice channel`);
+            return;
+        }
+
+        // Check if already connected to the correct channel
+        const existingConnection = getVoiceConnection(guild.id);
+        if (existingConnection && existingConnection.joinConfig.channelId === VOICE_CHANNEL_ID) {
+            console.log(`✅ Already connected to voice channel: ${voiceChannel.name}`);
+            return;
+        }
+
+        // Leave existing connection if any
+        if (existingConnection) {
+            existingConnection.destroy();
+            console.log('🔌 Destroyed existing voice connection');
+        }
+
+        // Join the voice channel
+        const connection = joinVoiceChannel({
+            channelId: VOICE_CHANNEL_ID,
+            guildId: guild.id,
+            adapterCreator: guild.voiceAdapterCreator,
+            selfDeaf: false,
+            selfMute: false
+        });
+
+        currentVoiceConnection = connection;
+
+        // Handle connection states
+        connection.on(VoiceConnectionStatus.Ready, () => {
+            console.log(`🎤 Successfully joined voice channel: ${voiceChannel.name} (${VOICE_CHANNEL_ID})`);
+            // Clear reconnect timeout on successful connection
+            if (reconnectTimeout) {
+                clearTimeout(reconnectTimeout);
+                reconnectTimeout = null;
+            }
+        });
+
+        connection.on(VoiceConnectionStatus.Disconnected, async () => {
+            console.log(`⚠️ Disconnected from voice channel, attempting to reconnect...`);
+            try {
+                // Wait 5 seconds then try to reconnect
+                await entersState(connection, VoiceConnectionStatus.Signalling, 5_000);
+                console.log('🔄 Reconnecting to voice channel...');
+            } catch (error) {
+                console.log('❌ Failed to reconnect, destroying connection...');
+                connection.destroy();
+                currentVoiceConnection = null;
+                // Schedule rejoin after 10 seconds
+                if (!reconnectTimeout) {
+                    reconnectTimeout = setTimeout(() => {
+                        reconnectTimeout = null;
+                        joinVoiceChannelProper();
+                    }, 10000);
+                }
+            }
+        });
+
+        connection.on(VoiceConnectionStatus.Destroyed, () => {
+            console.log('🔌 Voice connection destroyed');
+            currentVoiceConnection = null;
+            // Schedule rejoin after 10 seconds
+            if (!reconnectTimeout) {
+                reconnectTimeout = setTimeout(() => {
+                    reconnectTimeout = null;
+                    joinVoiceChannelProper();
+                }, 10000);
+            }
+        });
+
+        connection.on('error', (error) => {
+            console.error('❌ Voice connection error:', error.message);
+        });
+
+        // Wait for connection to be ready
+        await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
+        
+    } catch (error) {
+        console.error(`❌ Failed to join voice channel: ${error.message}`);
+        // Schedule rejoin after 30 seconds
+        if (!reconnectTimeout) {
+            reconnectTimeout = setTimeout(() => {
+                reconnectTimeout = null;
+                joinVoiceChannelProper();
+            }, 30000);
+        }
+    }
+}
+
+// Periodic check to ensure bot stays connected
+setInterval(async () => {
+    try {
+        const guild = client.guilds.cache.first();
+        if (!guild || !client.isReady()) return;
+
+        const voiceChannel = guild.channels.cache.get(VOICE_CHANNEL_ID);
+        if (!voiceChannel) return;
+
+        const connection = getVoiceConnection(guild.id);
+        
+        // If no connection exists but should, reconnect
+        if (!connection && VOICE_CHANNEL_ID) {
+            console.log('🔍 No voice connection found, reconnecting...');
+            await joinVoiceChannelProper();
+        }
+        
+        // If connection exists but is in disconnected state
+        if (connection && connection.state.status === VoiceConnectionStatus.Disconnected) {
+            console.log('🔍 Connection in disconnected state, attempting to recover...');
+            try {
+                await entersState(connection, VoiceConnectionStatus.Signalling, 5_000);
+            } catch (error) {
+                connection.destroy();
+                currentVoiceConnection = null;
+                await joinVoiceChannelProper();
+            }
+        }
+    } catch (error) {
+        // Silently handle periodic check errors
+    }
+}, 30000); // Check every 30 seconds
+
+// ============================================
+// HELPER FUNCTIONS
+// ============================================
 async function sendLog(message, action, target, reason) {
     try {
         const logChannel = client.channels.cache.get(LOG_CHANNEL_ID);
         if (!logChannel) return;
-
+        
         const logEmbed = new EmbedBuilder()
             .setColor(0xFF6B6B)
             .setTitle(`🔨 ${action}`)
@@ -63,14 +202,13 @@ async function sendLog(message, action, target, reason) {
                 { name: '📍 Channel', value: `<#${message.channel.id}>`, inline: true }
             )
             .setTimestamp();
-
+        
         await logChannel.send({ embeds: [logEmbed] });
     } catch (error) {
         console.error('Log error:', error);
     }
 }
 
-// Send success message
 async function sendSuccess(message, action, target, duration = null) {
     const embed = new EmbedBuilder()
         .setColor(0x4CAF50)
@@ -81,15 +219,11 @@ async function sendSuccess(message, action, target, duration = null) {
             { name: 'Target', value: target.user?.tag || target.tag, inline: true }
         );
     
-    if (duration) {
-        embed.addFields({ name: 'Duration', value: duration, inline: true });
-    }
-    
+    if (duration) embed.addFields({ name: 'Duration', value: duration, inline: true });
     embed.setTimestamp();
     await message.reply({ embeds: [embed] });
 }
 
-// Send error message
 async function sendError(message, errorText) {
     const embed = new EmbedBuilder()
         .setColor(0xFF0000)
@@ -99,13 +233,11 @@ async function sendError(message, errorText) {
     await message.reply({ embeds: [embed] });
 }
 
-// Check if user has mod permissions
 function hasModPermission(member) {
     if (member.permissions.has(PermissionsBitField.Flags.Administrator)) return true;
     return member.roles.cache.has(MOD_ROLE_ID);
 }
 
-// Parse time string (10m, 1h, 1d)
 function parseTime(timeString) {
     const match = timeString.match(/^(\d+)([mhd])$/);
     if (!match) return null;
@@ -121,7 +253,6 @@ function parseTime(timeString) {
     }
 }
 
-// Format milliseconds
 function formatDuration(ms) {
     const minutes = Math.floor(ms / 60000);
     const hours = Math.floor(minutes / 60);
@@ -133,7 +264,6 @@ function formatDuration(ms) {
     return 'unknown';
 }
 
-// Get target user
 async function getTarget(message, userId) {
     try {
         return await message.guild.members.fetch(userId);
@@ -142,7 +272,6 @@ async function getTarget(message, userId) {
     }
 }
 
-// ========== HELP COMMAND ==========
 async function showHelp(message) {
     const embed = new EmbedBuilder()
         .setColor(0x5865F2)
@@ -169,18 +298,17 @@ async function showHelp(message) {
         )
         .setFooter({ text: `⚠️ Moderation commands require <@&${MOD_ROLE_ID}> role` })
         .setTimestamp();
-
+    
     await message.reply({ embeds: [embed] });
 }
 
-// ========== WELCOME SYSTEM ==========
+// ============================================
+// WELCOME SYSTEM
+// ============================================
 client.on('guildMemberAdd', async (member) => {
     try {
         const welcomeChannel = client.channels.cache.get(WELCOME_CHANNEL_ID);
-        if (!welcomeChannel) {
-            console.log('⚠️ Welcome channel not found');
-            return;
-        }
+        if (!welcomeChannel) return;
 
         const welcomeEmbed = new EmbedBuilder()
             .setColor(0x4CAF50)
@@ -200,18 +328,16 @@ client.on('guildMemberAdd', async (member) => {
             .setFooter({ text: `ID: ${member.id} • Welcome!` })
             .setTimestamp();
 
-        await welcomeChannel.send({ 
-            content: `${member.toString()}`, 
-            embeds: [welcomeEmbed] 
-        });
-        
+        await welcomeChannel.send({ content: `${member.toString()}`, embeds: [welcomeEmbed] });
         console.log(`✅ Welcome message sent for ${member.user.tag}`);
     } catch (error) {
         console.error('Welcome error:', error);
     }
 });
 
-// ========== COMMAND HANDLER ==========
+// ============================================
+// COMMAND HANDLER
+// ============================================
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
     if (!message.content.startsWith('!')) return;
@@ -456,20 +582,37 @@ client.on('messageCreate', async (message) => {
     }
 });
 
-// ========== READY EVENT ==========
-client.once('ready', () => {
+// ============================================
+// READY EVENT
+// ============================================
+client.once('ready', async () => {
     console.log(`✅ Logged in as ${client.user.tag}`);
     console.log(`👋 Welcome channel: ${WELCOME_CHANNEL_ID}`);
     console.log(`📝 Log channel: ${LOG_CHANNEL_ID}`);
     console.log(`👮 Mod role: ${MOD_ROLE_ID}`);
+    console.log(`🎤 Voice channel: ${VOICE_CHANNEL_ID}`);
     console.log(`🚀 Bot is ready with 12+ commands!`);
     console.log(`💡 Commands work in ANY channel`);
+    console.log(`🔊 Using @discordjs/voice for stable voice connections`);
+    
+    // Auto join voice channel on startup (wait 3 seconds for guild to be ready)
+    setTimeout(async () => {
+        await joinVoiceChannelProper();
+    }, 3000);
 });
 
-// ========== ERROR HANDLING ==========
+// ============================================
+// ERROR HANDLING
+// ============================================
 process.on('unhandledRejection', (error) => {
     console.error('❌ Unhandled rejection:', error);
 });
 
-// ========== START BOT ==========
+process.on('uncaughtException', (error) => {
+    console.error('❌ Uncaught exception:', error);
+});
+
+// ============================================
+// START BOT
+// ============================================
 client.login(BOT_TOKEN);
