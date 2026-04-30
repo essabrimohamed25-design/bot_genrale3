@@ -1,10 +1,10 @@
 {
-  "name": "premium-discord-bot",
-  "version": "5.0.0",
-  "description": "Complete Discord moderation bot with profile cards",
-  "main": "index.js",
+  "name": "simple-moderation-bot",
+  "version": "1.0.0",
+  "description": "Complete Discord moderation bot",
+  "main": "bot.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node bot.js"
   },
   "dependencies": {
     "discord.js": "^14.14.1",
