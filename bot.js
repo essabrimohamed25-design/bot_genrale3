@@ -1,7 +1,6 @@
 const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const sqlite3 = require('sqlite3').verbose();
-const { createCanvas, loadImage, registerFont } = require('canvas');
-const path = require('path');
+const { createCanvas, loadImage } = require('canvas');
 require('dotenv').config();
 
 // ============================================
@@ -26,15 +25,13 @@ db.serialize(() => {
 // ============================================
 // CONFIGURATION
 // ============================================
-const { BOT_TOKEN, LOG_CHANNEL_ID, MOD_ROLE_ID, AUTO_ROLE_ID, WELCOME_IMAGE_URL, PROFILE_BG_URL } = process.env;
+const { BOT_TOKEN, LOG_CHANNEL_ID, MOD_ROLE_ID, AUTO_ROLE_ID, WELCOME_IMAGE_URL } = process.env;
+const PROFILE_BG_URL = process.env.PROFILE_BG_URL || "https://media.discordapp.net/attachments/1480969775344652470/1496647110525845625/DF7E4FDA-66D3-49FF-BD5E-7C746253AE2D.png";
 
 if (!BOT_TOKEN) {
     console.error('❌ Missing BOT_TOKEN');
     process.exit(1);
 }
-
-// Default profile background
-const PROFILE_BACKGROUND = PROFILE_BG_URL || "https://media.discordapp.net/attachments/1480969775344652470/1496647110525845625/DF7E4FDA-66D3-49FF-BD5E-7C746253AE2D.png";
 
 // ============================================
 // CLIENT SETUP
@@ -55,6 +52,7 @@ const client = new Client({
 // STORAGE
 // ============================================
 const userMessages = new Map();
+const voiceTracking = new Map();
 
 // ============================================
 // USER STATS FUNCTIONS
@@ -80,7 +78,7 @@ function updateUserStats(userId, messages = 0, voiceMinutes = 0) {
             } else {
                 const newMessages = row.messages + messages;
                 const newVoiceMinutes = row.voice_minutes + voiceMinutes;
-                let newXp = row.xp + messages + (voiceMinutes / 60);
+                let newXp = row.xp + messages + Math.floor(voiceMinutes / 60);
                 let newLevel = row.level;
                 
                 while (newXp >= newLevel * 100) {
@@ -103,17 +101,13 @@ client.on('messageCreate', async (message) => {
 });
 
 // Track voice time
-const voiceTracking = new Map();
-
 client.on('voiceStateUpdate', async (oldState, newState) => {
     const userId = newState.member?.id || oldState.member?.id;
     if (!userId) return;
     
-    // User joined voice channel
     if (oldState.channelId === null && newState.channelId !== null) {
         voiceTracking.set(userId, Date.now());
     }
-    // User left voice channel
     else if (oldState.channelId !== null && newState.channelId === null) {
         const startTime = voiceTracking.get(userId);
         if (startTime) {
@@ -135,19 +129,10 @@ async function generateProfileCard(user, stats) {
     const canvas = createCanvas(width, height);
     const ctx = canvas.getContext('2d');
     
-    // Load background image
-    let background = null;
     try {
-        background = await loadImage(PROFILE_BACKGROUND);
-    } catch (error) {
-        console.error('Failed to load background:', error.message);
-    }
-    
-    // Draw background
-    if (background) {
+        const background = await loadImage(PROFILE_BG_URL);
         ctx.drawImage(background, 0, 0, width, height);
-    } else {
-        // Fallback gradient background
+    } catch (error) {
         const gradient = ctx.createLinearGradient(0, 0, width, height);
         gradient.addColorStop(0, '#1a1a2e');
         gradient.addColorStop(1, '#16213e');
@@ -155,21 +140,19 @@ async function generateProfileCard(user, stats) {
         ctx.fillRect(0, 0, width, height);
     }
     
-    // Overlay semi-transparent dark layer for readability
+    // Overlay
     ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
     ctx.fillRect(0, 0, width, height);
     
-    // Border decoration
+    // Border
     ctx.strokeStyle = '#5865F2';
     ctx.lineWidth = 3;
     ctx.strokeRect(10, 10, width - 20, height - 20);
     
-    // Load and draw avatar
+    // Avatar
     try {
         const avatarURL = user.displayAvatarURL({ extension: 'png', size: 256 });
         const avatar = await loadImage(avatarURL);
-        
-        // Circular avatar clipping
         ctx.save();
         ctx.beginPath();
         ctx.arc(100, 100, 65, 0, Math.PI * 2);
@@ -178,33 +161,24 @@ async function generateProfileCard(user, stats) {
         ctx.drawImage(avatar, 35, 35, 130, 130);
         ctx.restore();
         
-        // Avatar border
         ctx.beginPath();
         ctx.arc(100, 100, 68, 0, Math.PI * 2);
         ctx.strokeStyle = '#5865F2';
         ctx.lineWidth = 4;
         ctx.stroke();
-    } catch (error) {
-        console.error('Failed to load avatar:', error.message);
-    }
+    } catch (error) {}
     
     // Username
     ctx.fillStyle = '#FFFFFF';
     ctx.font = 'bold 28px "Segoe UI", Arial, sans-serif';
     ctx.fillText(user.username, 190, 70);
-    
-    // Discriminator / tag
     ctx.fillStyle = '#B9BBBE';
     ctx.font = '18px "Segoe UI", Arial, sans-serif';
     ctx.fillText(`#${user.discriminator}`, 190, 100);
     
-    // Stats panel background
+    // Stats panel
     ctx.fillStyle = 'rgba(88, 101, 242, 0.15)';
     ctx.fillRect(180, 120, 590, 250);
-    
-    // Stats labels and values
-    ctx.fillStyle = '#B9BBBE';
-    ctx.font = '16px "Segoe UI", Arial, sans-serif';
     
     // Level
     ctx.fillStyle = '#5865F2';
@@ -214,7 +188,7 @@ async function generateProfileCard(user, stats) {
     ctx.font = '14px "Segoe UI", Arial, sans-serif';
     ctx.fillText('LEVEL', 210, 220);
     
-    // Rank (placeholder - based on XP)
+    // Rank
     const rank = Math.floor(stats.xp / 100) + 1;
     ctx.fillStyle = '#5865F2';
     ctx.font = 'bold 48px "Segoe UI", Arial, sans-serif';
@@ -231,7 +205,7 @@ async function generateProfileCard(user, stats) {
     ctx.font = '14px "Segoe UI", Arial, sans-serif';
     ctx.fillText('TOTAL XP', 490, 220);
     
-    // Messages count
+    // Messages
     ctx.fillStyle = '#57F287';
     ctx.font = 'bold 32px "Segoe UI", Arial, sans-serif';
     ctx.fillText(`${stats.messages.toLocaleString()}`, 210, 300);
@@ -260,10 +234,8 @@ async function generateProfileCard(user, stats) {
     
     ctx.fillStyle = '#2C2F33';
     ctx.fillRect(barX, barY, barWidth, barHeight);
-    
     ctx.fillStyle = '#5865F2';
     ctx.fillRect(barX, barY, (xpProgress / 100) * barWidth, barHeight);
-    
     ctx.fillStyle = '#FFFFFF';
     ctx.font = '12px "Segoe UI", Arial, sans-serif';
     ctx.fillText(`${Math.floor(stats.xp)} / ${xpForNextLevel} XP`, barX + 10, barY + 15);
@@ -277,7 +249,7 @@ async function generateProfileCard(user, stats) {
 }
 
 // ============================================
-// HELPER FUNCTIONS (existing)
+// HELPER FUNCTIONS
 // ============================================
 function hasPermission(member) {
     if (!member) return false;
@@ -350,7 +322,7 @@ function getWarningCount(userId, guildId) {
 }
 
 // ============================================
-// TICKET FUNCTIONS (existing)
+// TICKET FUNCTIONS
 // ============================================
 function saveTicketConfig(guildId, panelChannel, category, logChannel, supportRole) {
     return new Promise((resolve) => {
@@ -405,7 +377,7 @@ async function createTicketPanel(channel, config) {
 }
 
 // ============================================
-// REACTION ROLE FUNCTIONS (existing)
+// REACTION ROLE FUNCTIONS
 // ============================================
 function saveReactionRole(guildId, messageId, channelId, emoji, roleId) {
     return new Promise((resolve) => {
@@ -453,7 +425,7 @@ async function createReactionPanel(channel, phoneRoleId, pcRoleId) {
 }
 
 // ============================================
-// VERIFICATION FUNCTIONS (existing)
+// VERIFICATION FUNCTIONS
 // ============================================
 function saveVerificationConfig(guildId, autoRole, verifiedRole, channel, imageUrl, setupBy) {
     return new Promise((resolve) => {
@@ -496,7 +468,7 @@ async function sendVerificationPanel(channel) {
 }
 
 // ============================================
-// SETUP COLLECTORS (existing)
+// SETUP COLLECTORS
 // ============================================
 async function startTicketSetup(message) {
     const filter = (m) => m.author.id === message.author.id;
@@ -612,7 +584,7 @@ async function startVerificationSetup(message) {
 }
 
 // ============================================
-// ANNOUNCEMENT FUNCTIONS (existing)
+// ANNOUNCEMENT FUNCTIONS
 // ============================================
 async function sendProfessionalAnnouncement(channel, message) {
     const embed = new EmbedBuilder()
@@ -642,7 +614,7 @@ async function sendWelcomeAnnouncement(channel) {
 }
 
 // ============================================
-// ANTI-SPAM & ANTI-LINK (existing)
+// ANTI-SPAM & ANTI-LINK
 // ============================================
 function checkSpam(userId, channelId) {
     const now = Date.now();
@@ -673,7 +645,7 @@ function saveGiveaway(messageId, channelId, prize, winners, endTime) {
 }
 
 // ============================================
-// LOGS SYSTEM (existing)
+// LOGS SYSTEM
 // ============================================
 client.on('messageDelete', async (msg) => {
     if (!msg.guild || msg.author?.bot) return;
@@ -764,7 +736,7 @@ client.on('messageCreate', async (message) => {
 });
 
 // ============================================
-// INTERACTION HANDLER (existing)
+// INTERACTION HANDLER
 // ============================================
 client.on('interactionCreate', async (interaction) => {
     if (!interaction.isButton()) return;
@@ -896,7 +868,7 @@ client.on('messageCreate', async (message) => {
         return message.reply('❌ You need moderator permissions!');
     }
     
-    // HELP (updated with !info)
+    // ========== HELP (updated with !info) ==========
     if (cmd === 'help') {
         const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('🛡️ Bot Commands')
             .setDescription('**Moderation:** `!ban`, `!kick`, `!mute`, `!unmute`, `!warn`, `!clear`, `!lock`, `!unlock`, `!giverole`, `!removerole`, `!unban`')
@@ -933,17 +905,15 @@ client.on('messageCreate', async (message) => {
         
         const stats = await getUserStats(targetUser.id);
         
-        // Generate the profile card image
         await message.channel.sendTyping();
         
         try {
             const imageBuffer = await generateProfileCard(targetUser, stats);
             const attachment = { attachment: imageBuffer, name: `profile_${targetUser.id}.png` };
-            
             await message.reply({ files: [attachment] });
         } catch (error) {
-            console.error('Profile card generation error:', error);
-            message.reply('❌ Failed to generate profile card. Please try again later.');
+            console.error('Profile card error:', error);
+            message.reply('❌ Failed to generate profile card.');
         }
         return;
     }
@@ -1095,7 +1065,7 @@ client.on('messageCreate', async (message) => {
         } catch { message.reply('❌ Not found'); }
     }
     
-    // INFO
+    // INFO COMMANDS
     else if (cmd === 'userinfo') {
         const id = args[0];
         const target = id ? await getMember(guild, id) : member;
@@ -1205,7 +1175,4 @@ process.on('unhandledRejection', (err) => console.error('Unhandled rejection:', 
 process.on('uncaughtException', (err) => console.error('Uncaught exception:', err.message));
 process.on('SIGINT', () => { db.close(() => process.exit(0)); });
 
-// ============================================
-// START BOT
-// ============================================
 client.login(BOT_TOKEN);
