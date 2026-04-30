@@ -1,5 +1,8 @@
 const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField, ChannelType } = require('discord.js');
 const { joinVoiceChannel, getVoiceConnection, VoiceConnectionStatus, entersState } = require('@discordjs/voice');
+const { createCanvas, loadImage, registerFont } = require('canvas');
+const path = require('path');
+const axios = require('axios');
 
 // ============================================
 // ENVIRONMENT VARIABLES
@@ -19,6 +22,230 @@ if (!BOT_TOKEN) { console.error('❌ BOT_TOKEN is missing!'); process.exit(1); }
 if (!WELCOME_CHANNEL_ID) { console.error('❌ WELCOME_CHANNEL_ID is missing!'); process.exit(1); }
 if (!LOG_CHANNEL_ID) { console.error('❌ LOG_CHANNEL_ID is missing!'); process.exit(1); }
 if (!MOD_ROLE_ID) { console.error('❌ MOD_ROLE_ID is missing!'); process.exit(1); }
+
+// ============================================
+// XP SYSTEM DATA (In-memory storage)
+// ============================================
+// In a production environment, you would store this in a database
+const userXP = new Map(); // userID -> { xp, level, totalXP }
+
+// XP calculation functions
+function getLevelFromXP(totalXP) {
+    return Math.floor(Math.sqrt(totalXP / 100)) + 1;
+}
+
+function getXPForLevel(level) {
+    return Math.pow(level - 1, 2) * 100;
+}
+
+function getXPProgress(currentXP, level) {
+    const xpForCurrentLevel = getXPForLevel(level);
+    const xpForNextLevel = getXPForLevel(level + 1);
+    const xpNeeded = xpForNextLevel - xpForCurrentLevel;
+    const xpGained = currentXP - xpForCurrentLevel;
+    return (xpGained / xpNeeded) * 100;
+}
+
+// Helper to get or initialize user XP data
+function getUserXPData(userId) {
+    if (!userXP.has(userId)) {
+        userXP.set(userId, {
+            totalXP: 0,
+            level: 1,
+            messages: 0
+        });
+    }
+    return userXP.get(userId);
+}
+
+// Award XP for messages
+function awardXP(userId) {
+    const data = getUserXPData(userId);
+    const earnedXP = Math.floor(Math.random() * 15) + 5; // 5-20 XP per message
+    
+    data.totalXP += earnedXP;
+    data.messages++;
+    
+    const newLevel = getLevelFromXP(data.totalXP);
+    let leveledUp = false;
+    
+    if (newLevel > data.level) {
+        data.level = newLevel;
+        leveledUp = true;
+    }
+    
+    userXP.set(userId, data);
+    return { earnedXP, leveledUp, newLevel: data.level };
+}
+
+// Get rank of a user
+function getUserRank(userId) {
+    const sortedUsers = Array.from(userXP.entries())
+        .sort((a, b) => b[1].totalXP - a[1].totalXP)
+        .map(entry => entry[0]);
+    
+    const rank = sortedUsers.indexOf(userId) + 1;
+    return rank > 0 ? rank : null;
+}
+
+// ============================================
+// CANVAS PROFILE CARD GENERATION
+// ============================================
+async function generateProfileCard(user, xpData, rank) {
+    // Canvas dimensions
+    const width = 1000;
+    const height = 450;
+    const canvas = createCanvas(width, height);
+    const ctx = canvas.getContext('2d');
+    
+    // Load background image
+    const backgroundUrl = 'https://media.discordapp.net/attachments/1480969775344652470/1496647110525845625/DF7E4FDA-66D3-49FF-BD5E-7C746253AE2D.png';
+    const backgroundImg = await loadImage(backgroundUrl);
+    
+    // Draw background
+    ctx.drawImage(backgroundImg, 0, 0, width, height);
+    
+    // Add dark overlay for readability (gradient)
+    const gradient = ctx.createLinearGradient(0, 0, width, height);
+    gradient.addColorStop(0, 'rgba(0, 0, 0, 0.75)');
+    gradient.addColorStop(1, 'rgba(0, 0, 0, 0.85)');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, width, height);
+    
+    // Add subtle border
+    ctx.strokeStyle = '#00ff88';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(5, 5, width - 10, height - 10);
+    
+    // Add glow effect (shadow)
+    ctx.shadowColor = '#00ff88';
+    ctx.shadowBlur = 15;
+    
+    // ===== AVATAR =====
+    // Load user avatar
+    const avatarURL = user.displayAvatarURL({ extension: 'png', size: 256 });
+    const avatarImg = await loadImage(avatarURL);
+    
+    // Create circular avatar with glow
+    const avatarSize = 128;
+    const avatarX = 60;
+    const avatarY = height / 2 - avatarSize / 2;
+    
+    // Avatar background circle (glow)
+    ctx.beginPath();
+    ctx.arc(avatarX + avatarSize/2, avatarY + avatarSize/2, avatarSize/2 + 3, 0, Math.PI * 2);
+    ctx.fillStyle = '#00ff88';
+    ctx.fill();
+    
+    // Clip circle for avatar
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(avatarX + avatarSize/2, avatarY + avatarSize/2, avatarSize/2, 0, Math.PI * 2);
+    ctx.closePath();
+    ctx.clip();
+    
+    // Draw avatar
+    ctx.drawImage(avatarImg, avatarX, avatarY, avatarSize, avatarSize);
+    ctx.restore();
+    
+    // Reset shadow
+    ctx.shadowBlur = 0;
+    
+    // ===== USERNAME =====
+    ctx.font = 'bold 36px "Arial"';
+    ctx.fillStyle = '#ffffff';
+    ctx.shadowBlur = 5;
+    ctx.shadowColor = '#00ff88';
+    const username = user.username;
+    ctx.fillText(username, 220, height/2 - 100);
+    
+    // User ID/tag (smaller)
+    ctx.font = '20px "Arial"';
+    ctx.fillStyle = '#aaaaaa';
+    ctx.shadowBlur = 2;
+    ctx.fillText('@' + user.discriminator + ' • #' + user.id.slice(-5), 220, height/2 - 65);
+    
+    // ===== STATS SECTION =====
+    const statsY = height/2 - 20;
+    
+    // Level
+    ctx.font = 'bold 24px "Arial"';
+    ctx.fillStyle = '#00ff88';
+    ctx.fillText('LEVEL', 220, statsY);
+    
+    ctx.font = 'bold 42px "Arial"';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(xpData.level, 220, statsY + 48);
+    
+    // Rank
+    ctx.font = 'bold 24px "Arial"';
+    ctx.fillStyle = '#00ff88';
+    ctx.fillText('RANK', 400, statsY);
+    
+    ctx.font = 'bold 42px "Arial"';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(rank ? `#${rank}` : 'N/A', 400, statsY + 48);
+    
+    // Total XP
+    ctx.font = 'bold 24px "Arial"';
+    ctx.fillStyle = '#00ff88';
+    ctx.fillText('TOTAL XP', 580, statsY);
+    
+    ctx.font = 'bold 36px "Arial"';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(xpData.totalXP.toLocaleString(), 580, statsY + 45);
+    
+    // ===== PROGRESS BAR =====
+    const progressY = height - 90;
+    const progressX = 220;
+    const progressWidth = 700;
+    const progressHeight = 25;
+    
+    // Calculate XP progress
+    const currentLevelXP = getXPForLevel(xpData.level);
+    const nextLevelXP = getXPForLevel(xpData.level + 1);
+    const xpNeeded = nextLevelXP - currentLevelXP;
+    const xpGained = xpData.totalXP - currentLevelXP;
+    const progressPercent = (xpGained / xpNeeded) * 100;
+    
+    // Progress bar background
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+    ctx.fillRect(progressX, progressY, progressWidth, progressHeight);
+    
+    // Progress bar fill with gradient
+    const progressGradient = ctx.createLinearGradient(progressX, progressY, progressX + progressWidth, progressY);
+    progressGradient.addColorStop(0, '#00ff88');
+    progressGradient.addColorStop(1, '#00cc66');
+    ctx.fillStyle = progressGradient;
+    ctx.fillRect(progressX, progressY, (progressWidth * progressPercent) / 100, progressHeight);
+    
+    // Progress bar border
+    ctx.strokeStyle = '#00ff88';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(progressX, progressY, progressWidth, progressHeight);
+    
+    // Progress text
+    ctx.font = '16px "Arial"';
+    ctx.fillStyle = '#ffffff';
+    ctx.shadowBlur = 0;
+    const progressText = `${xpGained} / ${xpNeeded} XP (${Math.round(progressPercent)}%)`;
+    const textWidth = ctx.measureText(progressText).width;
+    ctx.fillText(progressText, progressX + (progressWidth - textWidth) / 2, progressY - 8);
+    
+    // XP to next level text
+    ctx.font = '14px "Arial"';
+    ctx.fillStyle = '#aaaaaa';
+    ctx.fillText(`${xpNeeded - xpGained} XP needed for level ${xpData.level + 1}`, progressX + progressWidth - 200, progressY - 8);
+    
+    // ===== BOTTOM STATS =====
+    ctx.font = '16px "Arial"';
+    ctx.fillStyle = '#888888';
+    const messagesSent = xpData.messages || 0;
+    ctx.fillText(`${messagesSent} messages • Joined: ${user.createdAt.toLocaleDateString()}`, 60, height - 30);
+    
+    // Return buffer
+    return canvas.toBuffer();
+}
 
 // ============================================
 // CLIENT INITIALIZATION
@@ -293,6 +520,7 @@ async function showHelp(message) {
                 '!userinfo [userID] - Show user information\n' +
                 '!serverinfo - Show server information\n' +
                 '!say <message> - Make the bot say something\n' +
+                '!info - Generate your gaming profile card\n' +
                 '!help - Show this help panel\n' +
                 '```', inline: false }
         )
@@ -332,6 +560,34 @@ client.on('guildMemberAdd', async (member) => {
         console.log(`✅ Welcome message sent for ${member.user.tag}`);
     } catch (error) {
         console.error('Welcome error:', error);
+    }
+});
+
+// ============================================
+// XP SYSTEM - Award XP for messages
+// ============================================
+client.on('messageCreate', async (message) => {
+    if (message.author.bot) return;
+    if (!message.guild) return;
+    
+    // Award XP for normal messages (not commands)
+    if (!message.content.startsWith('!')) {
+        const { earnedXP, leveledUp, newLevel } = awardXP(message.author.id);
+        
+        if (leveledUp) {
+            // Send level up message
+            const levelUpEmbed = new EmbedBuilder()
+                .setColor(0x00ff88)
+                .setTitle('🎉 LEVEL UP! 🎉')
+                .setDescription(`${message.author} has reached **Level ${newLevel}**!`)
+                .addFields(
+                    { name: '✨ Total XP', value: getUserXPData(message.author.id).totalXP.toLocaleString(), inline: true },
+                    { name: '📊 Messages', value: getUserXPData(message.author.id).messages.toLocaleString(), inline: true }
+                )
+                .setTimestamp();
+            
+            await message.channel.send({ embeds: [levelUpEmbed] }).catch(() => {});
+        }
     }
 });
 
@@ -494,6 +750,33 @@ client.on('messageCreate', async (message) => {
         }
     }
     
+    // ========== INFO (Profile Card) ==========
+    else if (command === 'info') {
+        try {
+            // Send typing indicator
+            await message.channel.sendTyping();
+            
+            // Get user's XP data and rank
+            const xpData = getUserXPData(message.author.id);
+            const rank = getUserRank(message.author.id);
+            
+            // Generate profile card
+            const profileBuffer = await generateProfileCard(message.author, xpData, rank);
+            
+            // Send the image
+            await message.reply({
+                content: `🎮 **${message.author.username}'s Gaming Profile**`,
+                files: [{
+                    attachment: profileBuffer,
+                    name: `profile_${message.author.id}.png`
+                }]
+            });
+        } catch (error) {
+            console.error('Error generating profile card:', error);
+            await sendError(message, 'Failed to generate profile card. Please try again later.');
+        }
+    }
+    
     // ========== PING ==========
     else if (command === 'ping') {
         const embed = new EmbedBuilder()
@@ -591,9 +874,10 @@ client.once('ready', async () => {
     console.log(`📝 Log channel: ${LOG_CHANNEL_ID}`);
     console.log(`👮 Mod role: ${MOD_ROLE_ID}`);
     console.log(`🎤 Voice channel: ${VOICE_CHANNEL_ID}`);
-    console.log(`🚀 Bot is ready with 12+ commands!`);
+    console.log(`🚀 Bot is ready with 12+ commands including !info!`);
     console.log(`💡 Commands work in ANY channel`);
     console.log(`🔊 Using @discordjs/voice for stable voice connections`);
+    console.log(`🎮 XP System enabled - users earn XP for messages!`);
     
     // Auto join voice channel on startup (wait 3 seconds for guild to be ready)
     setTimeout(async () => {
