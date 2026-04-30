@@ -1,250 +1,19 @@
 const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField, ChannelType } = require('discord.js');
 const { joinVoiceChannel, getVoiceConnection, VoiceConnectionStatus, entersState } = require('@discordjs/voice');
-const { createCanvas, loadImage, registerFont } = require('canvas');
-const path = require('path');
-const axios = require('axios');
 
 // ============================================
 // ENVIRONMENT VARIABLES
 // ============================================
-if (process.env.NODE_ENV !== 'production') {
-    try { require('dotenv').config(); } catch (error) {}
-}
-
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const WELCOME_CHANNEL_ID = process.env.WELCOME_CHANNEL_ID;
 const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID;
 const MOD_ROLE_ID = process.env.MOD_ROLE_ID;
-const VOICE_CHANNEL_ID = process.env.VOICE_CHANNEL_ID || "1485406556542472322";
+const VOICE_CHANNEL_ID = process.env.VOICE_CHANNEL_ID;
 
 // Validation
-if (!BOT_TOKEN) { console.error('❌ BOT_TOKEN is missing!'); process.exit(1); }
-if (!WELCOME_CHANNEL_ID) { console.error('❌ WELCOME_CHANNEL_ID is missing!'); process.exit(1); }
-if (!LOG_CHANNEL_ID) { console.error('❌ LOG_CHANNEL_ID is missing!'); process.exit(1); }
-if (!MOD_ROLE_ID) { console.error('❌ MOD_ROLE_ID is missing!'); process.exit(1); }
-
-// ============================================
-// XP SYSTEM DATA (In-memory storage)
-// ============================================
-// In a production environment, you would store this in a database
-const userXP = new Map(); // userID -> { xp, level, totalXP }
-
-// XP calculation functions
-function getLevelFromXP(totalXP) {
-    return Math.floor(Math.sqrt(totalXP / 100)) + 1;
-}
-
-function getXPForLevel(level) {
-    return Math.pow(level - 1, 2) * 100;
-}
-
-function getXPProgress(currentXP, level) {
-    const xpForCurrentLevel = getXPForLevel(level);
-    const xpForNextLevel = getXPForLevel(level + 1);
-    const xpNeeded = xpForNextLevel - xpForCurrentLevel;
-    const xpGained = currentXP - xpForCurrentLevel;
-    return (xpGained / xpNeeded) * 100;
-}
-
-// Helper to get or initialize user XP data
-function getUserXPData(userId) {
-    if (!userXP.has(userId)) {
-        userXP.set(userId, {
-            totalXP: 0,
-            level: 1,
-            messages: 0
-        });
-    }
-    return userXP.get(userId);
-}
-
-// Award XP for messages
-function awardXP(userId) {
-    const data = getUserXPData(userId);
-    const earnedXP = Math.floor(Math.random() * 15) + 5; // 5-20 XP per message
-    
-    data.totalXP += earnedXP;
-    data.messages++;
-    
-    const newLevel = getLevelFromXP(data.totalXP);
-    let leveledUp = false;
-    
-    if (newLevel > data.level) {
-        data.level = newLevel;
-        leveledUp = true;
-    }
-    
-    userXP.set(userId, data);
-    return { earnedXP, leveledUp, newLevel: data.level };
-}
-
-// Get rank of a user
-function getUserRank(userId) {
-    const sortedUsers = Array.from(userXP.entries())
-        .sort((a, b) => b[1].totalXP - a[1].totalXP)
-        .map(entry => entry[0]);
-    
-    const rank = sortedUsers.indexOf(userId) + 1;
-    return rank > 0 ? rank : null;
-}
-
-// ============================================
-// CANVAS PROFILE CARD GENERATION
-// ============================================
-async function generateProfileCard(user, xpData, rank) {
-    // Canvas dimensions
-    const width = 1000;
-    const height = 450;
-    const canvas = createCanvas(width, height);
-    const ctx = canvas.getContext('2d');
-    
-    // Load background image
-    const backgroundUrl = 'https://media.discordapp.net/attachments/1480969775344652470/1496647110525845625/DF7E4FDA-66D3-49FF-BD5E-7C746253AE2D.png';
-    const backgroundImg = await loadImage(backgroundUrl);
-    
-    // Draw background
-    ctx.drawImage(backgroundImg, 0, 0, width, height);
-    
-    // Add dark overlay for readability (gradient)
-    const gradient = ctx.createLinearGradient(0, 0, width, height);
-    gradient.addColorStop(0, 'rgba(0, 0, 0, 0.75)');
-    gradient.addColorStop(1, 'rgba(0, 0, 0, 0.85)');
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, width, height);
-    
-    // Add subtle border
-    ctx.strokeStyle = '#00ff88';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(5, 5, width - 10, height - 10);
-    
-    // Add glow effect (shadow)
-    ctx.shadowColor = '#00ff88';
-    ctx.shadowBlur = 15;
-    
-    // ===== AVATAR =====
-    // Load user avatar
-    const avatarURL = user.displayAvatarURL({ extension: 'png', size: 256 });
-    const avatarImg = await loadImage(avatarURL);
-    
-    // Create circular avatar with glow
-    const avatarSize = 128;
-    const avatarX = 60;
-    const avatarY = height / 2 - avatarSize / 2;
-    
-    // Avatar background circle (glow)
-    ctx.beginPath();
-    ctx.arc(avatarX + avatarSize/2, avatarY + avatarSize/2, avatarSize/2 + 3, 0, Math.PI * 2);
-    ctx.fillStyle = '#00ff88';
-    ctx.fill();
-    
-    // Clip circle for avatar
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(avatarX + avatarSize/2, avatarY + avatarSize/2, avatarSize/2, 0, Math.PI * 2);
-    ctx.closePath();
-    ctx.clip();
-    
-    // Draw avatar
-    ctx.drawImage(avatarImg, avatarX, avatarY, avatarSize, avatarSize);
-    ctx.restore();
-    
-    // Reset shadow
-    ctx.shadowBlur = 0;
-    
-    // ===== USERNAME =====
-    ctx.font = 'bold 36px "Arial"';
-    ctx.fillStyle = '#ffffff';
-    ctx.shadowBlur = 5;
-    ctx.shadowColor = '#00ff88';
-    const username = user.username;
-    ctx.fillText(username, 220, height/2 - 100);
-    
-    // User ID/tag (smaller)
-    ctx.font = '20px "Arial"';
-    ctx.fillStyle = '#aaaaaa';
-    ctx.shadowBlur = 2;
-    ctx.fillText('@' + user.discriminator + ' • #' + user.id.slice(-5), 220, height/2 - 65);
-    
-    // ===== STATS SECTION =====
-    const statsY = height/2 - 20;
-    
-    // Level
-    ctx.font = 'bold 24px "Arial"';
-    ctx.fillStyle = '#00ff88';
-    ctx.fillText('LEVEL', 220, statsY);
-    
-    ctx.font = 'bold 42px "Arial"';
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText(xpData.level, 220, statsY + 48);
-    
-    // Rank
-    ctx.font = 'bold 24px "Arial"';
-    ctx.fillStyle = '#00ff88';
-    ctx.fillText('RANK', 400, statsY);
-    
-    ctx.font = 'bold 42px "Arial"';
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText(rank ? `#${rank}` : 'N/A', 400, statsY + 48);
-    
-    // Total XP
-    ctx.font = 'bold 24px "Arial"';
-    ctx.fillStyle = '#00ff88';
-    ctx.fillText('TOTAL XP', 580, statsY);
-    
-    ctx.font = 'bold 36px "Arial"';
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText(xpData.totalXP.toLocaleString(), 580, statsY + 45);
-    
-    // ===== PROGRESS BAR =====
-    const progressY = height - 90;
-    const progressX = 220;
-    const progressWidth = 700;
-    const progressHeight = 25;
-    
-    // Calculate XP progress
-    const currentLevelXP = getXPForLevel(xpData.level);
-    const nextLevelXP = getXPForLevel(xpData.level + 1);
-    const xpNeeded = nextLevelXP - currentLevelXP;
-    const xpGained = xpData.totalXP - currentLevelXP;
-    const progressPercent = (xpGained / xpNeeded) * 100;
-    
-    // Progress bar background
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
-    ctx.fillRect(progressX, progressY, progressWidth, progressHeight);
-    
-    // Progress bar fill with gradient
-    const progressGradient = ctx.createLinearGradient(progressX, progressY, progressX + progressWidth, progressY);
-    progressGradient.addColorStop(0, '#00ff88');
-    progressGradient.addColorStop(1, '#00cc66');
-    ctx.fillStyle = progressGradient;
-    ctx.fillRect(progressX, progressY, (progressWidth * progressPercent) / 100, progressHeight);
-    
-    // Progress bar border
-    ctx.strokeStyle = '#00ff88';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(progressX, progressY, progressWidth, progressHeight);
-    
-    // Progress text
-    ctx.font = '16px "Arial"';
-    ctx.fillStyle = '#ffffff';
-    ctx.shadowBlur = 0;
-    const progressText = `${xpGained} / ${xpNeeded} XP (${Math.round(progressPercent)}%)`;
-    const textWidth = ctx.measureText(progressText).width;
-    ctx.fillText(progressText, progressX + (progressWidth - textWidth) / 2, progressY - 8);
-    
-    // XP to next level text
-    ctx.font = '14px "Arial"';
-    ctx.fillStyle = '#aaaaaa';
-    ctx.fillText(`${xpNeeded - xpGained} XP needed for level ${xpData.level + 1}`, progressX + progressWidth - 200, progressY - 8);
-    
-    // ===== BOTTOM STATS =====
-    ctx.font = '16px "Arial"';
-    ctx.fillStyle = '#888888';
-    const messagesSent = xpData.messages || 0;
-    ctx.fillText(`${messagesSent} messages • Joined: ${user.createdAt.toLocaleDateString()}`, 60, height - 30);
-    
-    // Return buffer
-    return canvas.toBuffer();
+if (!BOT_TOKEN) {
+    console.error('❌ BOT_TOKEN is missing!');
+    process.exit(1);
 }
 
 // ============================================
@@ -261,51 +30,82 @@ const client = new Client({
     ]
 });
 
-const startTime = Date.now();
 let currentVoiceConnection = null;
 let reconnectTimeout = null;
 
 // ============================================
-// VOICE CHANNEL MANAGEMENT (Using @discordjs/voice)
+// XP SYSTEM (In-memory with basic persistence)
+// ============================================
+const userXP = new Map();
+
+function getLevelFromXP(totalXP) {
+    return Math.floor(Math.sqrt(totalXP / 100)) + 1;
+}
+
+function getXPForLevel(level) {
+    return Math.pow(level - 1, 2) * 100;
+}
+
+function getUserXPData(userId) {
+    if (!userXP.has(userId)) {
+        userXP.set(userId, {
+            totalXP: 0,
+            level: 1,
+            messages: 0
+        });
+    }
+    return userXP.get(userId);
+}
+
+function awardXP(userId) {
+    const data = getUserXPData(userId);
+    const earnedXP = Math.floor(Math.random() * 15) + 5;
+    
+    data.totalXP += earnedXP;
+    data.messages++;
+    
+    const newLevel = getLevelFromXP(data.totalXP);
+    let leveledUp = false;
+    
+    if (newLevel > data.level) {
+        data.level = newLevel;
+        leveledUp = true;
+    }
+    
+    userXP.set(userId, data);
+    return { earnedXP, leveledUp, newLevel: data.level };
+}
+
+function getUserRank(userId) {
+    const sortedUsers = Array.from(userXP.entries())
+        .sort((a, b) => b[1].totalXP - a[1].totalXP)
+        .map(entry => entry[0]);
+    
+    const rank = sortedUsers.indexOf(userId) + 1;
+    return rank > 0 ? rank : null;
+}
+
+// ============================================
+// VOICE CHANNEL MANAGEMENT
 // ============================================
 async function joinVoiceChannelProper() {
     if (!VOICE_CHANNEL_ID) {
-        console.log('⚠️ No VOICE_CHANNEL_ID configured, skipping voice join');
+        console.log('⚠️ No VOICE_CHANNEL_ID configured');
         return;
     }
 
     try {
         const guild = client.guilds.cache.first();
-        if (!guild) {
-            console.log('⚠️ No guild found, waiting for ready event');
-            return;
-        }
+        if (!guild) return;
 
         const voiceChannel = guild.channels.cache.get(VOICE_CHANNEL_ID);
-        if (!voiceChannel) {
-            console.log(`⚠️ Voice channel ${VOICE_CHANNEL_ID} not found`);
-            return;
-        }
+        if (!voiceChannel || voiceChannel.type !== ChannelType.GuildVoice) return;
 
-        if (voiceChannel.type !== ChannelType.GuildVoice) {
-            console.log(`⚠️ Channel ${VOICE_CHANNEL_ID} is not a voice channel`);
-            return;
-        }
-
-        // Check if already connected to the correct channel
         const existingConnection = getVoiceConnection(guild.id);
-        if (existingConnection && existingConnection.joinConfig.channelId === VOICE_CHANNEL_ID) {
-            console.log(`✅ Already connected to voice channel: ${voiceChannel.name}`);
-            return;
-        }
+        if (existingConnection && existingConnection.joinConfig.channelId === VOICE_CHANNEL_ID) return;
 
-        // Leave existing connection if any
-        if (existingConnection) {
-            existingConnection.destroy();
-            console.log('🔌 Destroyed existing voice connection');
-        }
+        if (existingConnection) existingConnection.destroy();
 
-        // Join the voice channel
         const connection = joinVoiceChannel({
             channelId: VOICE_CHANNEL_ID,
             guildId: guild.id,
@@ -316,10 +116,8 @@ async function joinVoiceChannelProper() {
 
         currentVoiceConnection = connection;
 
-        // Handle connection states
         connection.on(VoiceConnectionStatus.Ready, () => {
-            console.log(`🎤 Successfully joined voice channel: ${voiceChannel.name} (${VOICE_CHANNEL_ID})`);
-            // Clear reconnect timeout on successful connection
+            console.log(`✅ Connected to voice channel: ${voiceChannel.name}`);
             if (reconnectTimeout) {
                 clearTimeout(reconnectTimeout);
                 reconnectTimeout = null;
@@ -327,16 +125,12 @@ async function joinVoiceChannelProper() {
         });
 
         connection.on(VoiceConnectionStatus.Disconnected, async () => {
-            console.log(`⚠️ Disconnected from voice channel, attempting to reconnect...`);
+            console.log(`⚠️ Disconnected, reconnecting...`);
             try {
-                // Wait 5 seconds then try to reconnect
                 await entersState(connection, VoiceConnectionStatus.Signalling, 5_000);
-                console.log('🔄 Reconnecting to voice channel...');
             } catch (error) {
-                console.log('❌ Failed to reconnect, destroying connection...');
                 connection.destroy();
                 currentVoiceConnection = null;
-                // Schedule rejoin after 10 seconds
                 if (!reconnectTimeout) {
                     reconnectTimeout = setTimeout(() => {
                         reconnectTimeout = null;
@@ -346,28 +140,10 @@ async function joinVoiceChannelProper() {
             }
         });
 
-        connection.on(VoiceConnectionStatus.Destroyed, () => {
-            console.log('🔌 Voice connection destroyed');
-            currentVoiceConnection = null;
-            // Schedule rejoin after 10 seconds
-            if (!reconnectTimeout) {
-                reconnectTimeout = setTimeout(() => {
-                    reconnectTimeout = null;
-                    joinVoiceChannelProper();
-                }, 10000);
-            }
-        });
-
-        connection.on('error', (error) => {
-            console.error('❌ Voice connection error:', error.message);
-        });
-
-        // Wait for connection to be ready
         await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
         
     } catch (error) {
-        console.error(`❌ Failed to join voice channel: ${error.message}`);
-        // Schedule rejoin after 30 seconds
+        console.error(`❌ Voice connection error: ${error.message}`);
         if (!reconnectTimeout) {
             reconnectTimeout = setTimeout(() => {
                 reconnectTimeout = null;
@@ -377,38 +153,18 @@ async function joinVoiceChannelProper() {
     }
 }
 
-// Periodic check to ensure bot stays connected
+// Periodic voice connection check
 setInterval(async () => {
     try {
         const guild = client.guilds.cache.first();
         if (!guild || !client.isReady()) return;
-
-        const voiceChannel = guild.channels.cache.get(VOICE_CHANNEL_ID);
-        if (!voiceChannel) return;
-
-        const connection = getVoiceConnection(guild.id);
         
-        // If no connection exists but should, reconnect
+        const connection = getVoiceConnection(guild.id);
         if (!connection && VOICE_CHANNEL_ID) {
-            console.log('🔍 No voice connection found, reconnecting...');
             await joinVoiceChannelProper();
         }
-        
-        // If connection exists but is in disconnected state
-        if (connection && connection.state.status === VoiceConnectionStatus.Disconnected) {
-            console.log('🔍 Connection in disconnected state, attempting to recover...');
-            try {
-                await entersState(connection, VoiceConnectionStatus.Signalling, 5_000);
-            } catch (error) {
-                connection.destroy();
-                currentVoiceConnection = null;
-                await joinVoiceChannelProper();
-            }
-        }
-    } catch (error) {
-        // Silently handle periodic check errors
-    }
-}, 30000); // Check every 30 seconds
+    } catch (error) {}
+}, 30000);
 
 // ============================================
 // HELPER FUNCTIONS
@@ -519,8 +275,9 @@ async function showHelp(message) {
                 '!avatar [userID] - Show user avatar\n' +
                 '!userinfo [userID] - Show user information\n' +
                 '!serverinfo - Show server information\n' +
+                '!profile [userID] - Show gaming profile with XP stats\n' +
+                '!leaderboard - Show top 10 XP leaders\n' +
                 '!say <message> - Make the bot say something\n' +
-                '!info - Generate your gaming profile card\n' +
                 '!help - Show this help panel\n' +
                 '```', inline: false }
         )
@@ -528,6 +285,99 @@ async function showHelp(message) {
         .setTimestamp();
     
     await message.reply({ embeds: [embed] });
+}
+
+// ============================================
+// PROFILE COMMAND (Embed-based, no Canvas)
+// ============================================
+async function showProfile(message, userId = null) {
+    try {
+        let user = message.author;
+        let member = message.member;
+        
+        if (userId) {
+            const fetchedMember = await getTarget(message, userId);
+            if (fetchedMember) {
+                member = fetchedMember;
+                user = fetchedMember.user;
+            }
+        }
+        
+        const xpData = getUserXPData(user.id);
+        const rank = getUserRank(user.id);
+        
+        const currentLevelXP = getXPForLevel(xpData.level);
+        const nextLevelXP = getXPForLevel(xpData.level + 1);
+        const xpNeeded = nextLevelXP - currentLevelXP;
+        const xpGained = xpData.totalXP - currentLevelXP;
+        const progressPercent = Math.round((xpGained / xpNeeded) * 100);
+        
+        // Create progress bar
+        const barLength = 20;
+        const filledBars = Math.round((progressPercent / 100) * barLength);
+        const emptyBars = barLength - filledBars;
+        const progressBar = '█'.repeat(filledBars) + '░'.repeat(emptyBars);
+        
+        const profileEmbed = new EmbedBuilder()
+            .setColor(0x00ff88)
+            .setTitle(`🎮 ${user.username}'s Gaming Profile`)
+            .setThumbnail(user.displayAvatarURL({ size: 1024, dynamic: true }))
+            .addFields(
+                { name: '📊 Level', value: `**${xpData.level}**`, inline: true },
+                { name: '🏆 Rank', value: `**${rank ? `#${rank}` : 'N/A'}**`, inline: true },
+                { name: '✨ Total XP', value: `**${xpData.totalXP.toLocaleString()}**`, inline: true },
+                { name: '💬 Messages', value: `**${xpData.messages.toLocaleString()}**`, inline: true },
+                { name: '📈 XP Progress', value: `\`${progressBar}\` **${progressPercent}%**\n${xpGained}/${xpNeeded} XP`, inline: false },
+                { name: '🎯 Next Level', value: `${xpNeeded - xpGained} XP needed for Level ${xpData.level + 1}`, inline: false },
+                { name: '📅 Joined', value: `<t:${Math.floor(user.createdTimestamp / 1000)}:R>`, inline: true }
+            )
+            .setFooter({ text: `ID: ${user.id} • Keep chatting to earn XP!` })
+            .setTimestamp();
+        
+        if (member?.joinedTimestamp) {
+            profileEmbed.addFields({ name: '📅 Server Joined', value: `<t:${Math.floor(member.joinedTimestamp / 1000)}:R>`, inline: true });
+        }
+        
+        await message.reply({ embeds: [profileEmbed] });
+    } catch (error) {
+        console.error('Profile error:', error);
+        await sendError(message, 'Failed to generate profile.');
+    }
+}
+
+async function showLeaderboard(message) {
+    try {
+        const sortedUsers = Array.from(userXP.entries())
+            .sort((a, b) => b[1].totalXP - a[1].totalXP)
+            .slice(0, 10);
+        
+        if (sortedUsers.length === 0) {
+            return sendError(message, 'No XP data available yet!');
+        }
+        
+        const leaderboardText = [];
+        for (let i = 0; i < sortedUsers.length; i++) {
+            const [userId, data] = sortedUsers[i];
+            try {
+                const user = await client.users.fetch(userId);
+                leaderboardText.push(`**${i + 1}.** ${user.tag} - Level ${data.level} (${data.totalXP.toLocaleString()} XP)`);
+            } catch (error) {
+                leaderboardText.push(`**${i + 1}.** Unknown User - Level ${data.level} (${data.totalXP.toLocaleString()} XP)`);
+            }
+        }
+        
+        const embed = new EmbedBuilder()
+            .setColor(0x00ff88)
+            .setTitle('🏆 XP Leaderboard')
+            .setDescription(leaderboardText.join('\n'))
+            .setFooter({ text: 'Keep chatting to earn XP and rank up!' })
+            .setTimestamp();
+        
+        await message.reply({ embeds: [embed] });
+    } catch (error) {
+        console.error('Leaderboard error:', error);
+        await sendError(message, 'Failed to load leaderboard.');
+    }
 }
 
 // ============================================
@@ -552,7 +402,6 @@ client.on('guildMemberAdd', async (member) => {
                 `**Have fun and make new friends! 🎉**`
             )
             .setThumbnail(member.user.displayAvatarURL({ size: 1024, dynamic: true }))
-            .setImage('https://media.discordapp.net/attachments/1480969775344652470/1496647172148559983/BBCD65E5-E8A2-47BB-80A0-0A208431F3A6.png')
             .setFooter({ text: `ID: ${member.id} • Welcome!` })
             .setTimestamp();
 
@@ -570,12 +419,10 @@ client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
     if (!message.guild) return;
     
-    // Award XP for normal messages (not commands)
     if (!message.content.startsWith('!')) {
         const { earnedXP, leveledUp, newLevel } = awardXP(message.author.id);
         
         if (leveledUp) {
-            // Send level up message
             const levelUpEmbed = new EmbedBuilder()
                 .setColor(0x00ff88)
                 .setTitle('🎉 LEVEL UP! 🎉')
@@ -601,10 +448,15 @@ client.on('messageCreate', async (message) => {
     const args = message.content.slice(1).trim().split(/ +/);
     const command = args.shift().toLowerCase();
     
-    // Help command - no permission needed
+    // Public commands (no permission needed)
     if (command === 'help') return showHelp(message);
+    if (command === 'profile') {
+        const userId = args[0];
+        return showProfile(message, userId);
+    }
+    if (command === 'leaderboard') return showLeaderboard(message);
     
-    // Check mod permission for moderation commands
+    // Moderation commands - check permission
     const modCommands = ['ban', 'kick', 'timeout', 'unmute', 'clear', 'warn'];
     if (modCommands.includes(command) && !hasModPermission(message.member)) {
         return sendError(message, `You need the <@&${MOD_ROLE_ID}> role to use moderation commands!`);
@@ -715,7 +567,9 @@ client.on('messageCreate', async (message) => {
             
             const reply = await message.reply({ embeds: [confirmEmbed] });
             setTimeout(() => reply.delete(), 3000);
-            await sendLog(message, `Clear (${deleted.size} messages)`, { id: 'N/A', tag: 'Channel' }, `Deleted ${deleted.size} messages`);
+            if (LOG_CHANNEL_ID) {
+                await sendLog(message, `Clear (${deleted.size} messages)`, { id: 'N/A', tag: 'Channel' }, `Deleted ${deleted.size} messages`);
+            }
         } catch (error) {
             sendError(message, 'Failed to clear messages. Messages may be older than 14 days!');
         }
@@ -747,33 +601,6 @@ client.on('messageCreate', async (message) => {
             await sendLog(message, 'Warning', target, reason);
         } catch (error) {
             sendError(message, 'Failed to warn user.');
-        }
-    }
-    
-    // ========== INFO (Profile Card) ==========
-    else if (command === 'info') {
-        try {
-            // Send typing indicator
-            await message.channel.sendTyping();
-            
-            // Get user's XP data and rank
-            const xpData = getUserXPData(message.author.id);
-            const rank = getUserRank(message.author.id);
-            
-            // Generate profile card
-            const profileBuffer = await generateProfileCard(message.author, xpData, rank);
-            
-            // Send the image
-            await message.reply({
-                content: `🎮 **${message.author.username}'s Gaming Profile**`,
-                files: [{
-                    attachment: profileBuffer,
-                    name: `profile_${message.author.id}.png`
-                }]
-            });
-        } catch (error) {
-            console.error('Error generating profile card:', error);
-            await sendError(message, 'Failed to generate profile card. Please try again later.');
         }
     }
     
@@ -870,19 +697,14 @@ client.on('messageCreate', async (message) => {
 // ============================================
 client.once('ready', async () => {
     console.log(`✅ Logged in as ${client.user.tag}`);
-    console.log(`👋 Welcome channel: ${WELCOME_CHANNEL_ID}`);
-    console.log(`📝 Log channel: ${LOG_CHANNEL_ID}`);
-    console.log(`👮 Mod role: ${MOD_ROLE_ID}`);
-    console.log(`🎤 Voice channel: ${VOICE_CHANNEL_ID}`);
-    console.log(`🚀 Bot is ready with 12+ commands including !info!`);
-    console.log(`💡 Commands work in ANY channel`);
-    console.log(`🔊 Using @discordjs/voice for stable voice connections`);
-    console.log(`🎮 XP System enabled - users earn XP for messages!`);
+    console.log(`🎮 XP System Active - Users earn XP for messages!`);
+    console.log(`🤖 Bot is ready with ${client.guilds.cache.size} guild(s)`);
     
-    // Auto join voice channel on startup (wait 3 seconds for guild to be ready)
-    setTimeout(async () => {
-        await joinVoiceChannelProper();
-    }, 3000);
+    if (VOICE_CHANNEL_ID) {
+        setTimeout(async () => {
+            await joinVoiceChannelProper();
+        }, 3000);
+    }
 });
 
 // ============================================
