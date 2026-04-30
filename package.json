@@ -1,6 +1,6 @@
 {
   "name": "premium-discord-bot",
-  "version": "6.0.0",
+  "version": "5.0.0",
   "description": "Complete Discord moderation bot with verification, tickets, reaction roles, and profile cards",
   "main": "index.js",
   "scripts": {
