@@ -1,10 +1,10 @@
 {
-  "name": "simple-moderation-bot",
+  "name": "discord-moderation-bot",
   "version": "1.0.0",
-  "description": "Complete Discord moderation bot",
-  "main": "bot.js",
+  "description": "Complete Discord moderation bot with verification, tickets, reaction roles",
+  "main": "index.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node index.js"
   },
   "dependencies": {
     "discord.js": "^14.14.1",
