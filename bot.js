@@ -1,722 +1,1209 @@
-const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField, ChannelType } = require('discord.js');
-const { joinVoiceChannel, getVoiceConnection, VoiceConnectionStatus, entersState } = require('@discordjs/voice');
+const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const sqlite3 = require('sqlite3').verbose();
+const { createCanvas, loadImage, registerFont } = require('canvas');
+const path = require('path');
+require('dotenv').config();
 
 // ============================================
-// ENVIRONMENT VARIABLES
+// DATABASE SETUP
 // ============================================
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const WELCOME_CHANNEL_ID = process.env.WELCOME_CHANNEL_ID;
-const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID;
-const MOD_ROLE_ID = process.env.MOD_ROLE_ID;
-const VOICE_CHANNEL_ID = process.env.VOICE_CHANNEL_ID;
+const db = new sqlite3.Database('./bot_data.db');
 
-// Validation
+db.serialize(() => {
+    db.run(`CREATE TABLE IF NOT EXISTS warnings (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, guild_id TEXT, reason TEXT, moderator TEXT, date TEXT)`);
+    db.run(`CREATE TABLE IF NOT EXISTS suggestions (id INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT, user_id TEXT, suggestion TEXT, status TEXT, date TEXT)`);
+    db.run(`CREATE TABLE IF NOT EXISTS giveaways (id INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT, channel_id TEXT, prize TEXT, winners INTEGER, end_time INTEGER)`);
+    db.run(`CREATE TABLE IF NOT EXISTS tickets (user_id TEXT, channel_id TEXT, guild_id TEXT, created_at TEXT, PRIMARY KEY (user_id, guild_id))`);
+    db.run(`CREATE TABLE IF NOT EXISTS ticket_config (guild_id TEXT PRIMARY KEY, panel_channel TEXT, category TEXT, log_channel TEXT, support_role TEXT)`);
+    db.run(`CREATE TABLE IF NOT EXISTS reaction_roles (guild_id TEXT, message_id TEXT, channel_id TEXT, emoji TEXT, role_id TEXT)`);
+    db.run(`CREATE TABLE IF NOT EXISTS verification_config (guild_id TEXT PRIMARY KEY, auto_role TEXT, verified_role TEXT, channel TEXT, image_url TEXT, setup_by TEXT, setup_at TEXT)`);
+    
+    // User stats table for !info command
+    db.run(`CREATE TABLE IF NOT EXISTS user_stats (user_id TEXT PRIMARY KEY, messages INTEGER DEFAULT 0, voice_minutes INTEGER DEFAULT 0, xp INTEGER DEFAULT 0, level INTEGER DEFAULT 1)`);
+    console.log('✅ Database initialized');
+});
+
+// ============================================
+// CONFIGURATION
+// ============================================
+const { BOT_TOKEN, LOG_CHANNEL_ID, MOD_ROLE_ID, AUTO_ROLE_ID, WELCOME_IMAGE_URL, PROFILE_BG_URL } = process.env;
+
 if (!BOT_TOKEN) {
-    console.error('❌ BOT_TOKEN is missing!');
+    console.error('❌ Missing BOT_TOKEN');
     process.exit(1);
 }
 
+// Default profile background
+const PROFILE_BACKGROUND = PROFILE_BG_URL || "https://media.discordapp.net/attachments/1480969775344652470/1496647110525845625/DF7E4FDA-66D3-49FF-BD5E-7C746253AE2D.png";
+
 // ============================================
-// CLIENT INITIALIZATION
+// CLIENT SETUP
 // ============================================
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMembers,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildMembers,
         GatewayIntentBits.GuildModeration,
-        GatewayIntentBits.GuildVoiceStates
+        GatewayIntentBits.GuildVoiceStates,
+        GatewayIntentBits.GuildMessageReactions
     ]
 });
 
-let currentVoiceConnection = null;
-let reconnectTimeout = null;
+// ============================================
+// STORAGE
+// ============================================
+const userMessages = new Map();
 
 // ============================================
-// XP SYSTEM (In-memory with basic persistence)
+// USER STATS FUNCTIONS
 // ============================================
-const userXP = new Map();
-
-function getLevelFromXP(totalXP) {
-    return Math.floor(Math.sqrt(totalXP / 100)) + 1;
-}
-
-function getXPForLevel(level) {
-    return Math.pow(level - 1, 2) * 100;
-}
-
-function getUserXPData(userId) {
-    if (!userXP.has(userId)) {
-        userXP.set(userId, {
-            totalXP: 0,
-            level: 1,
-            messages: 0
-        });
-    }
-    return userXP.get(userId);
-}
-
-function awardXP(userId) {
-    const data = getUserXPData(userId);
-    const earnedXP = Math.floor(Math.random() * 15) + 5;
-    
-    data.totalXP += earnedXP;
-    data.messages++;
-    
-    const newLevel = getLevelFromXP(data.totalXP);
-    let leveledUp = false;
-    
-    if (newLevel > data.level) {
-        data.level = newLevel;
-        leveledUp = true;
-    }
-    
-    userXP.set(userId, data);
-    return { earnedXP, leveledUp, newLevel: data.level };
-}
-
-function getUserRank(userId) {
-    const sortedUsers = Array.from(userXP.entries())
-        .sort((a, b) => b[1].totalXP - a[1].totalXP)
-        .map(entry => entry[0]);
-    
-    const rank = sortedUsers.indexOf(userId) + 1;
-    return rank > 0 ? rank : null;
-}
-
-// ============================================
-// VOICE CHANNEL MANAGEMENT
-// ============================================
-async function joinVoiceChannelProper() {
-    if (!VOICE_CHANNEL_ID) {
-        console.log('⚠️ No VOICE_CHANNEL_ID configured');
-        return;
-    }
-
-    try {
-        const guild = client.guilds.cache.first();
-        if (!guild) return;
-
-        const voiceChannel = guild.channels.cache.get(VOICE_CHANNEL_ID);
-        if (!voiceChannel || voiceChannel.type !== ChannelType.GuildVoice) return;
-
-        const existingConnection = getVoiceConnection(guild.id);
-        if (existingConnection && existingConnection.joinConfig.channelId === VOICE_CHANNEL_ID) return;
-
-        if (existingConnection) existingConnection.destroy();
-
-        const connection = joinVoiceChannel({
-            channelId: VOICE_CHANNEL_ID,
-            guildId: guild.id,
-            adapterCreator: guild.voiceAdapterCreator,
-            selfDeaf: false,
-            selfMute: false
-        });
-
-        currentVoiceConnection = connection;
-
-        connection.on(VoiceConnectionStatus.Ready, () => {
-            console.log(`✅ Connected to voice channel: ${voiceChannel.name}`);
-            if (reconnectTimeout) {
-                clearTimeout(reconnectTimeout);
-                reconnectTimeout = null;
+function getUserStats(userId) {
+    return new Promise((resolve) => {
+        db.get(`SELECT * FROM user_stats WHERE user_id = ?`, [userId], (err, row) => {
+            if (err || !row) {
+                resolve({ messages: 0, voice_minutes: 0, xp: 0, level: 1 });
+            } else {
+                resolve(row);
             }
         });
+    });
+}
 
-        connection.on(VoiceConnectionStatus.Disconnected, async () => {
-            console.log(`⚠️ Disconnected, reconnecting...`);
-            try {
-                await entersState(connection, VoiceConnectionStatus.Signalling, 5_000);
-            } catch (error) {
-                connection.destroy();
-                currentVoiceConnection = null;
-                if (!reconnectTimeout) {
-                    reconnectTimeout = setTimeout(() => {
-                        reconnectTimeout = null;
-                        joinVoiceChannelProper();
-                    }, 10000);
+function updateUserStats(userId, messages = 0, voiceMinutes = 0) {
+    return new Promise((resolve) => {
+        db.get(`SELECT * FROM user_stats WHERE user_id = ?`, [userId], (err, row) => {
+            if (err || !row) {
+                db.run(`INSERT INTO user_stats (user_id, messages, voice_minutes, xp, level) VALUES (?, ?, ?, ?, ?)`,
+                    [userId, messages, voiceMinutes, 0, 1], () => resolve());
+            } else {
+                const newMessages = row.messages + messages;
+                const newVoiceMinutes = row.voice_minutes + voiceMinutes;
+                let newXp = row.xp + messages + (voiceMinutes / 60);
+                let newLevel = row.level;
+                
+                while (newXp >= newLevel * 100) {
+                    newXp -= newLevel * 100;
+                    newLevel++;
                 }
+                
+                db.run(`UPDATE user_stats SET messages = ?, voice_minutes = ?, xp = ?, level = ? WHERE user_id = ?`,
+                    [newMessages, newVoiceMinutes, Math.floor(newXp), newLevel, userId], () => resolve());
             }
         });
-
-        await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
-        
-    } catch (error) {
-        console.error(`❌ Voice connection error: ${error.message}`);
-        if (!reconnectTimeout) {
-            reconnectTimeout = setTimeout(() => {
-                reconnectTimeout = null;
-                joinVoiceChannelProper();
-            }, 30000);
-        }
-    }
+    });
 }
 
-// Periodic voice connection check
-setInterval(async () => {
-    try {
-        const guild = client.guilds.cache.first();
-        if (!guild || !client.isReady()) return;
-        
-        const connection = getVoiceConnection(guild.id);
-        if (!connection && VOICE_CHANNEL_ID) {
-            await joinVoiceChannelProper();
-        }
-    } catch (error) {}
-}, 30000);
+// Track message count
+client.on('messageCreate', async (message) => {
+    if (message.author.bot) return;
+    if (!message.guild) return;
+    await updateUserStats(message.author.id, 1, 0);
+});
 
-// ============================================
-// HELPER FUNCTIONS
-// ============================================
-async function sendLog(message, action, target, reason) {
-    try {
-        const logChannel = client.channels.cache.get(LOG_CHANNEL_ID);
-        if (!logChannel) return;
-        
-        const logEmbed = new EmbedBuilder()
-            .setColor(0xFF6B6B)
-            .setTitle(`🔨 ${action}`)
-            .setThumbnail(message.author.displayAvatarURL())
-            .addFields(
-                { name: '👮 Executor', value: `${message.author.tag} (${message.author.id})`, inline: true },
-                { name: '🎯 Target', value: `${target.user?.tag || target.tag || target} (${target.id || target})`, inline: true },
-                { name: '📝 Reason', value: reason || 'No reason provided', inline: false },
-                { name: '📍 Channel', value: `<#${message.channel.id}>`, inline: true }
-            )
-            .setTimestamp();
-        
-        await logChannel.send({ embeds: [logEmbed] });
-    } catch (error) {
-        console.error('Log error:', error);
-    }
-}
+// Track voice time
+const voiceTracking = new Map();
 
-async function sendSuccess(message, action, target, duration = null) {
-    const embed = new EmbedBuilder()
-        .setColor(0x4CAF50)
-        .setTitle(`✅ ${action}`)
-        .setDescription(`Successfully applied ${action.toLowerCase()} to <@${target.id}>`)
-        .addFields(
-            { name: 'Moderator', value: message.author.tag, inline: true },
-            { name: 'Target', value: target.user?.tag || target.tag, inline: true }
-        );
+client.on('voiceStateUpdate', async (oldState, newState) => {
+    const userId = newState.member?.id || oldState.member?.id;
+    if (!userId) return;
     
-    if (duration) embed.addFields({ name: 'Duration', value: duration, inline: true });
-    embed.setTimestamp();
-    await message.reply({ embeds: [embed] });
+    // User joined voice channel
+    if (oldState.channelId === null && newState.channelId !== null) {
+        voiceTracking.set(userId, Date.now());
+    }
+    // User left voice channel
+    else if (oldState.channelId !== null && newState.channelId === null) {
+        const startTime = voiceTracking.get(userId);
+        if (startTime) {
+            const minutes = Math.floor((Date.now() - startTime) / 60000);
+            if (minutes > 0) {
+                await updateUserStats(userId, 0, minutes);
+            }
+            voiceTracking.delete(userId);
+        }
+    }
+});
+
+// ============================================
+// PROFILE CARD GENERATOR (Canvas)
+// ============================================
+async function generateProfileCard(user, stats) {
+    const width = 800;
+    const height = 400;
+    const canvas = createCanvas(width, height);
+    const ctx = canvas.getContext('2d');
+    
+    // Load background image
+    let background = null;
+    try {
+        background = await loadImage(PROFILE_BACKGROUND);
+    } catch (error) {
+        console.error('Failed to load background:', error.message);
+    }
+    
+    // Draw background
+    if (background) {
+        ctx.drawImage(background, 0, 0, width, height);
+    } else {
+        // Fallback gradient background
+        const gradient = ctx.createLinearGradient(0, 0, width, height);
+        gradient.addColorStop(0, '#1a1a2e');
+        gradient.addColorStop(1, '#16213e');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, width, height);
+    }
+    
+    // Overlay semi-transparent dark layer for readability
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+    ctx.fillRect(0, 0, width, height);
+    
+    // Border decoration
+    ctx.strokeStyle = '#5865F2';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(10, 10, width - 20, height - 20);
+    
+    // Load and draw avatar
+    try {
+        const avatarURL = user.displayAvatarURL({ extension: 'png', size: 256 });
+        const avatar = await loadImage(avatarURL);
+        
+        // Circular avatar clipping
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(100, 100, 65, 0, Math.PI * 2);
+        ctx.closePath();
+        ctx.clip();
+        ctx.drawImage(avatar, 35, 35, 130, 130);
+        ctx.restore();
+        
+        // Avatar border
+        ctx.beginPath();
+        ctx.arc(100, 100, 68, 0, Math.PI * 2);
+        ctx.strokeStyle = '#5865F2';
+        ctx.lineWidth = 4;
+        ctx.stroke();
+    } catch (error) {
+        console.error('Failed to load avatar:', error.message);
+    }
+    
+    // Username
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = 'bold 28px "Segoe UI", Arial, sans-serif';
+    ctx.fillText(user.username, 190, 70);
+    
+    // Discriminator / tag
+    ctx.fillStyle = '#B9BBBE';
+    ctx.font = '18px "Segoe UI", Arial, sans-serif';
+    ctx.fillText(`#${user.discriminator}`, 190, 100);
+    
+    // Stats panel background
+    ctx.fillStyle = 'rgba(88, 101, 242, 0.15)';
+    ctx.fillRect(180, 120, 590, 250);
+    
+    // Stats labels and values
+    ctx.fillStyle = '#B9BBBE';
+    ctx.font = '16px "Segoe UI", Arial, sans-serif';
+    
+    // Level
+    ctx.fillStyle = '#5865F2';
+    ctx.font = 'bold 48px "Segoe UI", Arial, sans-serif';
+    ctx.fillText(`${stats.level}`, 210, 190);
+    ctx.fillStyle = '#B9BBBE';
+    ctx.font = '14px "Segoe UI", Arial, sans-serif';
+    ctx.fillText('LEVEL', 210, 220);
+    
+    // Rank (placeholder - based on XP)
+    const rank = Math.floor(stats.xp / 100) + 1;
+    ctx.fillStyle = '#5865F2';
+    ctx.font = 'bold 48px "Segoe UI", Arial, sans-serif';
+    ctx.fillText(`${rank}`, 350, 190);
+    ctx.fillStyle = '#B9BBBE';
+    ctx.font = '14px "Segoe UI", Arial, sans-serif';
+    ctx.fillText('RANK', 350, 220);
+    
+    // Total XP
+    ctx.fillStyle = '#FEE75C';
+    ctx.font = 'bold 48px "Segoe UI", Arial, sans-serif';
+    ctx.fillText(`${Math.floor(stats.xp)}`, 490, 190);
+    ctx.fillStyle = '#B9BBBE';
+    ctx.font = '14px "Segoe UI", Arial, sans-serif';
+    ctx.fillText('TOTAL XP', 490, 220);
+    
+    // Messages count
+    ctx.fillStyle = '#57F287';
+    ctx.font = 'bold 32px "Segoe UI", Arial, sans-serif';
+    ctx.fillText(`${stats.messages.toLocaleString()}`, 210, 300);
+    ctx.fillStyle = '#B9BBBE';
+    ctx.font = '14px "Segoe UI", Arial, sans-serif';
+    ctx.fillText('MESSAGES', 210, 330);
+    
+    // Voice time
+    const hours = Math.floor(stats.voice_minutes / 60);
+    const minutes = stats.voice_minutes % 60;
+    const voiceText = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+    ctx.fillStyle = '#EB459E';
+    ctx.font = 'bold 32px "Segoe UI", Arial, sans-serif';
+    ctx.fillText(voiceText, 450, 300);
+    ctx.fillStyle = '#B9BBBE';
+    ctx.font = '14px "Segoe UI", Arial, sans-serif';
+    ctx.fillText('VOICE TIME', 450, 330);
+    
+    // XP Bar
+    const xpForNextLevel = stats.level * 100;
+    const xpProgress = (stats.xp / xpForNextLevel) * 100;
+    const barWidth = 300;
+    const barHeight = 20;
+    const barX = 450;
+    const barY = 370;
+    
+    ctx.fillStyle = '#2C2F33';
+    ctx.fillRect(barX, barY, barWidth, barHeight);
+    
+    ctx.fillStyle = '#5865F2';
+    ctx.fillRect(barX, barY, (xpProgress / 100) * barWidth, barHeight);
+    
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = '12px "Segoe UI", Arial, sans-serif';
+    ctx.fillText(`${Math.floor(stats.xp)} / ${xpForNextLevel} XP`, barX + 10, barY + 15);
+    
+    // Footer
+    ctx.fillStyle = '#4F545C';
+    ctx.font = '12px "Segoe UI", Arial, sans-serif';
+    ctx.fillText('Profile generated by Premium Bot', width - 180, height - 15);
+    
+    return canvas.toBuffer();
 }
 
-async function sendError(message, errorText) {
-    const embed = new EmbedBuilder()
-        .setColor(0xFF0000)
-        .setTitle('❌ Error')
-        .setDescription(errorText)
-        .setTimestamp();
-    await message.reply({ embeds: [embed] });
-}
-
-function hasModPermission(member) {
+// ============================================
+// HELPER FUNCTIONS (existing)
+// ============================================
+function hasPermission(member) {
+    if (!member) return false;
     if (member.permissions.has(PermissionsBitField.Flags.Administrator)) return true;
-    return member.roles.cache.has(MOD_ROLE_ID);
+    if (MOD_ROLE_ID && member.roles.cache.has(MOD_ROLE_ID)) return true;
+    return false;
 }
 
-function parseTime(timeString) {
-    const match = timeString.match(/^(\d+)([mhd])$/);
-    if (!match) return null;
-    
-    const value = parseInt(match[1]);
-    const unit = match[2];
-    
-    switch(unit) {
-        case 'm': return value * 60 * 1000;
-        case 'h': return value * 60 * 60 * 1000;
-        case 'd': return value * 24 * 60 * 60 * 1000;
-        default: return null;
-    }
+async function sendLog(guild, action, target, moderator, reason) {
+    const logChannel = guild.channels.cache.get(LOG_CHANNEL_ID);
+    if (!logChannel) return;
+    const embed = new EmbedBuilder()
+        .setColor(0x2b2d31)
+        .setTitle(`📋 ${action}`)
+        .addFields(
+            { name: 'Moderator', value: moderator?.tag || 'System', inline: true },
+            { name: 'Target', value: target?.tag || target || 'Unknown', inline: true },
+            { name: 'Reason', value: reason || 'No reason', inline: false }
+        )
+        .setTimestamp();
+    await logChannel.send({ embeds: [embed] }).catch(() => {});
 }
 
-function formatDuration(ms) {
-    const minutes = Math.floor(ms / 60000);
-    const hours = Math.floor(minutes / 60);
-    const days = Math.floor(hours / 24);
-    
-    if (days > 0) return `${days} day(s)`;
-    if (hours > 0) return `${hours} hour(s)`;
-    if (minutes > 0) return `${minutes} minute(s)`;
-    return 'unknown';
-}
-
-async function getTarget(message, userId) {
+async function getMember(guild, id) {
     try {
-        return await message.guild.members.fetch(userId);
-    } catch (error) {
+        return await guild.members.fetch(id);
+    } catch {
         return null;
     }
 }
 
-async function showHelp(message) {
+function parseTime(timeStr) {
+    const match = timeStr.match(/^(\d+)([smhd])$/);
+    if (!match) return null;
+    const val = parseInt(match[1]);
+    const unit = match[2];
+    switch (unit) {
+        case 's': return val * 1000;
+        case 'm': return val * 60 * 1000;
+        case 'h': return val * 60 * 60 * 1000;
+        case 'd': return val * 24 * 60 * 60 * 1000;
+        default: return null;
+    }
+}
+
+function formatTime(ms) {
+    const mins = Math.floor(ms / 60000);
+    const hours = Math.floor(mins / 60);
+    const days = Math.floor(hours / 24);
+    if (days > 0) return `${days} day(s)`;
+    if (hours > 0) return `${hours} hour(s)`;
+    if (mins > 0) return `${mins} minute(s)`;
+    return `${Math.floor(ms / 1000)} second(s)`;
+}
+
+function addWarning(userId, guildId, reason, moderator) {
+    return new Promise((resolve) => {
+        db.run(`INSERT INTO warnings (user_id, guild_id, reason, moderator, date) VALUES (?, ?, ?, ?, ?)`,
+            [userId, guildId, reason, moderator, new Date().toISOString()], function(err) {
+                resolve(!err);
+            });
+    });
+}
+
+function getWarningCount(userId, guildId) {
+    return new Promise((resolve) => {
+        db.get(`SELECT COUNT(*) as count FROM warnings WHERE user_id = ? AND guild_id = ?`,
+            [userId, guildId], (err, row) => resolve(row ? row.count : 0));
+    });
+}
+
+// ============================================
+// TICKET FUNCTIONS (existing)
+// ============================================
+function saveTicketConfig(guildId, panelChannel, category, logChannel, supportRole) {
+    return new Promise((resolve) => {
+        db.run(`INSERT OR REPLACE INTO ticket_config (guild_id, panel_channel, category, log_channel, support_role) VALUES (?, ?, ?, ?, ?)`,
+            [guildId, panelChannel, category, logChannel, supportRole], () => resolve());
+    });
+}
+
+function getTicketConfig(guildId) {
+    return new Promise((resolve) => {
+        db.get(`SELECT * FROM ticket_config WHERE guild_id = ?`, [guildId], (err, row) => resolve(row));
+    });
+}
+
+function saveTicket(userId, channelId, guildId) {
+    return new Promise((resolve) => {
+        db.run(`INSERT OR REPLACE INTO tickets (user_id, channel_id, guild_id, created_at) VALUES (?, ?, ?, ?)`,
+            [userId, channelId, guildId, new Date().toISOString()], () => resolve());
+    });
+}
+
+function getTicket(userId, guildId) {
+    return new Promise((resolve) => {
+        db.get(`SELECT * FROM tickets WHERE user_id = ? AND guild_id = ?`, [userId, guildId], (err, row) => resolve(row));
+    });
+}
+
+function deleteTicket(userId, guildId) {
+    return new Promise((resolve) => {
+        db.run(`DELETE FROM tickets WHERE user_id = ? AND guild_id = ?`, [userId, guildId], () => resolve());
+    });
+}
+
+async function createTicketPanel(channel, config) {
     const embed = new EmbedBuilder()
         .setColor(0x5865F2)
-        .setTitle('🛡️ Moderation Bot - Help Panel')
-        .setDescription('Here are all available commands:')
-        .setThumbnail(message.guild.iconURL())
-        .addFields(
-            { name: '🛠️ MODERATION', value: '```\n' +
-                '!ban <userID> [reason] - Permanently ban a user\n' +
-                '!kick <userID> [reason] - Kick a user from the server\n' +
-                '!timeout <userID> <time> [reason] - Timeout user (10m/1h/1d)\n' +
-                '!unmute <userID> [reason] - Remove timeout from user\n' +
-                '!clear <amount> - Delete messages (1-100)\n' +
-                '!warn <userID> [reason] - Send a warning to user\n' +
-                '```', inline: false },
-            { name: 'ℹ️ INFORMATION', value: '```\n' +
-                '!ping - Check bot latency\n' +
-                '!avatar [userID] - Show user avatar\n' +
-                '!userinfo [userID] - Show user information\n' +
-                '!serverinfo - Show server information\n' +
-                '!profile [userID] - Show gaming profile with XP stats\n' +
-                '!leaderboard - Show top 10 XP leaders\n' +
-                '!say <message> - Make the bot say something\n' +
-                '!help - Show this help panel\n' +
-                '```', inline: false }
-        )
-        .setFooter({ text: `⚠️ Moderation commands require <@&${MOD_ROLE_ID}> role` })
-        .setTimestamp();
+        .setTitle('🎫 SUPPORT TICKET SYSTEM')
+        .setDescription('Click the button below to create a support ticket.')
+        .setTimestamp()
+        .setFooter({ text: channel.guild.name, iconURL: channel.guild.iconURL() });
     
-    await message.reply({ embeds: [embed] });
+    const row = new ActionRowBuilder()
+        .addComponents(
+            new ButtonBuilder()
+                .setCustomId('create_ticket')
+                .setLabel('Open Ticket')
+                .setEmoji('🎫')
+                .setStyle(ButtonStyle.Primary)
+        );
+    
+    await channel.send({ embeds: [embed], components: [row] });
 }
 
 // ============================================
-// PROFILE COMMAND (Embed-based, no Canvas)
+// REACTION ROLE FUNCTIONS (existing)
 // ============================================
-async function showProfile(message, userId = null) {
-    try {
-        let user = message.author;
-        let member = message.member;
-        
-        if (userId) {
-            const fetchedMember = await getTarget(message, userId);
-            if (fetchedMember) {
-                member = fetchedMember;
-                user = fetchedMember.user;
-            }
-        }
-        
-        const xpData = getUserXPData(user.id);
-        const rank = getUserRank(user.id);
-        
-        const currentLevelXP = getXPForLevel(xpData.level);
-        const nextLevelXP = getXPForLevel(xpData.level + 1);
-        const xpNeeded = nextLevelXP - currentLevelXP;
-        const xpGained = xpData.totalXP - currentLevelXP;
-        const progressPercent = Math.round((xpGained / xpNeeded) * 100);
-        
-        // Create progress bar
-        const barLength = 20;
-        const filledBars = Math.round((progressPercent / 100) * barLength);
-        const emptyBars = barLength - filledBars;
-        const progressBar = '█'.repeat(filledBars) + '░'.repeat(emptyBars);
-        
-        const profileEmbed = new EmbedBuilder()
-            .setColor(0x00ff88)
-            .setTitle(`🎮 ${user.username}'s Gaming Profile`)
-            .setThumbnail(user.displayAvatarURL({ size: 1024, dynamic: true }))
-            .addFields(
-                { name: '📊 Level', value: `**${xpData.level}**`, inline: true },
-                { name: '🏆 Rank', value: `**${rank ? `#${rank}` : 'N/A'}**`, inline: true },
-                { name: '✨ Total XP', value: `**${xpData.totalXP.toLocaleString()}**`, inline: true },
-                { name: '💬 Messages', value: `**${xpData.messages.toLocaleString()}**`, inline: true },
-                { name: '📈 XP Progress', value: `\`${progressBar}\` **${progressPercent}%**\n${xpGained}/${xpNeeded} XP`, inline: false },
-                { name: '🎯 Next Level', value: `${xpNeeded - xpGained} XP needed for Level ${xpData.level + 1}`, inline: false },
-                { name: '📅 Joined', value: `<t:${Math.floor(user.createdTimestamp / 1000)}:R>`, inline: true }
-            )
-            .setFooter({ text: `ID: ${user.id} • Keep chatting to earn XP!` })
-            .setTimestamp();
-        
-        if (member?.joinedTimestamp) {
-            profileEmbed.addFields({ name: '📅 Server Joined', value: `<t:${Math.floor(member.joinedTimestamp / 1000)}:R>`, inline: true });
-        }
-        
-        await message.reply({ embeds: [profileEmbed] });
-    } catch (error) {
-        console.error('Profile error:', error);
-        await sendError(message, 'Failed to generate profile.');
+function saveReactionRole(guildId, messageId, channelId, emoji, roleId) {
+    return new Promise((resolve) => {
+        db.run(`INSERT OR REPLACE INTO reaction_roles (guild_id, message_id, channel_id, emoji, role_id) VALUES (?, ?, ?, ?, ?)`,
+            [guildId, messageId, channelId, emoji, roleId], () => resolve());
+    });
+}
+
+function getReactionRoles(guildId, messageId) {
+    return new Promise((resolve) => {
+        db.all(`SELECT * FROM reaction_roles WHERE guild_id = ? AND message_id = ?`, [guildId, messageId], (err, rows) => resolve(rows || []));
+    });
+}
+
+async function createReactionPanel(channel, phoneRoleId, pcRoleId) {
+    const embed = new EmbedBuilder()
+        .setColor(0x5865F2)
+        .setTitle('📱 DEVICE ROLES')
+        .setDescription('Click the buttons below to get your device role!')
+        .addFields(
+            { name: '📱 Phone User', value: `<@&${phoneRoleId}>`, inline: true },
+            { name: '💻 PC User', value: `<@&${pcRoleId}>`, inline: true }
+        )
+        .setTimestamp()
+        .setFooter({ text: channel.guild.name, iconURL: channel.guild.iconURL() });
+    
+    const row = new ActionRowBuilder()
+        .addComponents(
+            new ButtonBuilder()
+                .setCustomId('role_phone')
+                .setLabel('Phone User')
+                .setEmoji('📱')
+                .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+                .setCustomId('role_pc')
+                .setLabel('PC User')
+                .setEmoji('💻')
+                .setStyle(ButtonStyle.Secondary)
+        );
+    
+    const message = await channel.send({ embeds: [embed], components: [row] });
+    await saveReactionRole(channel.guild.id, message.id, channel.id, '📱', phoneRoleId);
+    await saveReactionRole(channel.guild.id, message.id, channel.id, '💻', pcRoleId);
+    return message;
+}
+
+// ============================================
+// VERIFICATION FUNCTIONS (existing)
+// ============================================
+function saveVerificationConfig(guildId, autoRole, verifiedRole, channel, imageUrl, setupBy) {
+    return new Promise((resolve) => {
+        db.run(`INSERT OR REPLACE INTO verification_config (guild_id, auto_role, verified_role, channel, image_url, setup_by, setup_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [guildId, autoRole, verifiedRole, channel, imageUrl, setupBy, new Date().toISOString()], () => resolve());
+    });
+}
+
+function getVerificationConfig(guildId) {
+    return new Promise((resolve) => {
+        db.get(`SELECT * FROM verification_config WHERE guild_id = ?`, [guildId], (err, row) => resolve(row));
+    });
+}
+
+async function sendVerificationPanel(channel) {
+    const config = await getVerificationConfig(channel.guild.id);
+    if (!config) {
+        return channel.send('❌ Verification system not configured! Use `!verif` to set it up.');
     }
+
+    const embed = new EmbedBuilder()
+        .setColor(0x5865F2)
+        .setTitle(`✅ VERIFY YOURSELF`)
+        .setDescription(`Welcome to **${channel.guild.name}**!\n\nClick the button below to verify yourself.`)
+        .setImage(config.image_url)
+        .setThumbnail(channel.guild.iconURL())
+        .setTimestamp()
+        .setFooter({ text: channel.guild.name, iconURL: channel.guild.iconURL() });
+
+    const row = new ActionRowBuilder()
+        .addComponents(
+            new ButtonBuilder()
+                .setCustomId('verify_button')
+                .setLabel('Verify Yourself')
+                .setEmoji('✅')
+                .setStyle(ButtonStyle.Success)
+        );
+
+    await channel.send({ embeds: [embed], components: [row] });
 }
 
-async function showLeaderboard(message) {
-    try {
-        const sortedUsers = Array.from(userXP.entries())
-            .sort((a, b) => b[1].totalXP - a[1].totalXP)
-            .slice(0, 10);
+// ============================================
+// SETUP COLLECTORS (existing)
+// ============================================
+async function startTicketSetup(message) {
+    const filter = (m) => m.author.id === message.author.id;
+    let step = 0;
+    let config = {};
+    
+    const stepMessages = [
+        '📌 Send the **Channel ID** for the ticket panel:',
+        '📌 Send the **Category ID** for new tickets:',
+        '📌 Send the **Log Channel ID** for transcripts:',
+        '📌 Send the **Support Role ID**:'
+    ];
+    
+    const stepNames = ['panel_channel', 'category', 'log_channel', 'support_role'];
+    
+    await message.reply(stepMessages[0]);
+    
+    const collector = message.channel.createMessageCollector({ filter, time: 60000, max: 4 });
+    
+    collector.on('collect', async (msg) => {
+        config[stepNames[step]] = msg.content.trim();
+        step++;
         
-        if (sortedUsers.length === 0) {
-            return sendError(message, 'No XP data available yet!');
+        if (step < stepMessages.length) {
+            await msg.reply(stepMessages[step]);
+        } else {
+            collector.stop();
+            await saveTicketConfig(message.guild.id, config.panel_channel, config.category, config.log_channel, config.support_role);
+            await msg.reply('✅ Ticket system configured! Use `!ticket` to send the panel.');
+        }
+    });
+}
+
+async function startReactionSetup(message) {
+    const filter = (m) => m.author.id === message.author.id;
+    let step = 0;
+    let roles = {};
+    
+    const stepMessages = [
+        '📌 Send the **Role ID** for Phone Users:',
+        '📌 Send the **Role ID** for PC Users:'
+    ];
+    
+    const stepNames = ['phone_role', 'pc_role'];
+    
+    await message.reply(stepMessages[0]);
+    
+    const collector = message.channel.createMessageCollector({ filter, time: 60000, max: 2 });
+    
+    collector.on('collect', async (msg) => {
+        roles[stepNames[step]] = msg.content.trim();
+        step++;
+        
+        if (step < stepMessages.length) {
+            await msg.reply(stepMessages[step]);
+        } else {
+            collector.stop();
+            await createReactionPanel(message.channel, roles.phone_role, roles.pc_role);
+            await msg.reply('✅ Reaction role panel created!');
+        }
+    });
+}
+
+async function startVerificationSetup(message) {
+    const filter = (m) => m.author.id === message.author.id;
+    let step = 0;
+    let config = {};
+    
+    const stepMessages = [
+        '📌 **Step 1/4** - Send the **Auto Role ID** (role given on join):',
+        '📌 **Step 2/4** - Send the **Verified Role ID** (role after clicking verify):',
+        '📌 **Step 3/4** - Send the **Channel ID** for the verification panel:',
+        '📌 **Step 4/4** - Send the **Image URL** for the banner:'
+    ];
+    
+    const stepNames = ['auto_role', 'verified_role', 'channel', 'image_url'];
+    
+    await message.reply('🔧 **Verification System Setup**\n\n' + stepMessages[0]);
+    
+    const collector = message.channel.createMessageCollector({ filter, time: 120000, max: 4 });
+    
+    collector.on('collect', async (msg) => {
+        const value = msg.content.trim();
+        
+        if (step < 3 && !value.match(/^\d+$/)) {
+            await msg.reply('❌ Please provide a valid ID (numbers only).');
+            return;
         }
         
-        const leaderboardText = [];
-        for (let i = 0; i < sortedUsers.length; i++) {
-            const [userId, data] = sortedUsers[i];
-            try {
-                const user = await client.users.fetch(userId);
-                leaderboardText.push(`**${i + 1}.** ${user.tag} - Level ${data.level} (${data.totalXP.toLocaleString()} XP)`);
-            } catch (error) {
-                leaderboardText.push(`**${i + 1}.** Unknown User - Level ${data.level} (${data.totalXP.toLocaleString()} XP)`);
+        if (step === 3 && !value.match(/^https?:\/\//)) {
+            await msg.reply('❌ Please provide a valid image URL starting with http:// or https://');
+            return;
+        }
+        
+        config[stepNames[step]] = value;
+        step++;
+        
+        if (step < stepMessages.length) {
+            await msg.reply(stepMessages[step]);
+        } else {
+            collector.stop();
+            await saveVerificationConfig(message.guild.id, config.auto_role, config.verified_role, config.channel, config.image_url, message.author.id);
+            
+            const verifyChannel = message.guild.channels.cache.get(config.channel);
+            if (verifyChannel) {
+                await sendVerificationPanel(verifyChannel);
+                await msg.reply(`✅ Verification panel sent to ${verifyChannel}!`);
+            } else {
+                await msg.reply('❌ Channel not found! Please reconfigure.');
             }
         }
+    });
+}
+
+// ============================================
+// ANNOUNCEMENT FUNCTIONS (existing)
+// ============================================
+async function sendProfessionalAnnouncement(channel, message) {
+    const embed = new EmbedBuilder()
+        .setColor(0x5865F2)
+        .setTitle('📢 ANNOUNCEMENT')
+        .setDescription(message)
+        .setThumbnail(channel.guild.iconURL())
+        .setTimestamp();
+    await channel.send({ embeds: [embed] });
+}
+
+async function sendWelcomeAnnouncement(channel) {
+    const embed = new EmbedBuilder()
+        .setColor(0x5865F2)
+        .setTitle(`🌟 WELCOME TO ${channel.guild.name.toUpperCase()} 🌟`)
+        .setDescription(`> Thank you for joining our community!`)
+        .setThumbnail(channel.guild.iconURL())
+        .setImage(WELCOME_IMAGE_URL || 'https://media.discordapp.net/attachments/1462437612647088335/1482006389843824670/content.png')
+        .addFields(
+            { name: '📢 ANNOUNCEMENTS', value: 'Stay updated with server news', inline: false },
+            { name: '📜 RULES', value: 'Please read our rules', inline: false },
+            { name: '🎭 SELF ROLES', value: 'Use !roltest to get roles', inline: false },
+            { name: '🔧 COMMANDS', value: 'Use !help to see all commands', inline: false }
+        )
+        .setTimestamp();
+    await channel.send({ embeds: [embed] });
+}
+
+// ============================================
+// ANTI-SPAM & ANTI-LINK (existing)
+// ============================================
+function checkSpam(userId, channelId) {
+    const now = Date.now();
+    const key = `${userId}_${channelId}`;
+    if (!userMessages.has(key)) {
+        userMessages.set(key, [now]);
+        return false;
+    }
+    const timestamps = userMessages.get(key);
+    timestamps.push(now);
+    const recent = timestamps.filter(t => now - t < 5000);
+    userMessages.set(key, recent);
+    return recent.length > 5;
+}
+
+function containsLink(content) {
+    return /(https?:\/\/[^\s]+|discord\.gg\/[^\s]+)/gi.test(content);
+}
+
+function saveSuggestion(messageId, userId, suggestion) {
+    db.run(`INSERT INTO suggestions (message_id, user_id, suggestion, date) VALUES (?, ?, ?, ?)`,
+        [messageId, userId, suggestion, new Date().toISOString()]);
+}
+
+function saveGiveaway(messageId, channelId, prize, winners, endTime) {
+    db.run(`INSERT INTO giveaways (message_id, channel_id, prize, winners, end_time) VALUES (?, ?, ?, ?, ?)`,
+        [messageId, channelId, prize, winners, endTime]);
+}
+
+// ============================================
+// LOGS SYSTEM (existing)
+// ============================================
+client.on('messageDelete', async (msg) => {
+    if (!msg.guild || msg.author?.bot) return;
+    const logChannel = msg.guild.channels.cache.get(LOG_CHANNEL_ID);
+    if (!logChannel) return;
+    const embed = new EmbedBuilder().setColor(0xEF4444).setTitle('🗑️ Message Deleted')
+        .addFields(
+            { name: 'Author', value: msg.author?.tag || 'Unknown', inline: true },
+            { name: 'Channel', value: `<#${msg.channel.id}>`, inline: true },
+            { name: 'Content', value: msg.content?.slice(0, 500) || 'No content', inline: false })
+        .setTimestamp();
+    await logChannel.send({ embeds: [embed] }).catch(() => {});
+});
+
+client.on('messageUpdate', async (old, news) => {
+    if (!old.guild || old.author?.bot || old.content === news.content) return;
+    const logChannel = old.guild.channels.cache.get(LOG_CHANNEL_ID);
+    if (!logChannel) return;
+    const embed = new EmbedBuilder().setColor(0x3B82F6).setTitle('✏️ Message Edited')
+        .addFields(
+            { name: 'Author', value: old.author?.tag || 'Unknown', inline: true },
+            { name: 'Channel', value: `<#${old.channel.id}>`, inline: true },
+            { name: 'Before', value: old.content?.slice(0, 500) || 'Empty', inline: false },
+            { name: 'After', value: news.content?.slice(0, 500) || 'Empty', inline: false })
+        .setTimestamp();
+    await logChannel.send({ embeds: [embed] }).catch(() => {});
+});
+
+client.on('guildMemberAdd', async (member) => {
+    const logChannel = member.guild.channels.cache.get(LOG_CHANNEL_ID);
+    if (logChannel) {
+        const embed = new EmbedBuilder().setColor(0x22C55E).setTitle('👋 Member Joined').setDescription(`${member.user.tag} joined`)
+            .setThumbnail(member.user.displayAvatarURL()).setTimestamp();
+        await logChannel.send({ embeds: [embed] }).catch(() => {});
+    }
+    
+    const verificationConfig = await getVerificationConfig(member.guild.id);
+    if (verificationConfig && verificationConfig.auto_role) {
+        try {
+            await member.roles.add(verificationConfig.auto_role);
+        } catch (err) {}
+    } else if (AUTO_ROLE_ID) {
+        try {
+            await member.roles.add(AUTO_ROLE_ID);
+        } catch (err) {}
+    }
+});
+
+client.on('guildMemberRemove', async (member) => {
+    const logChannel = member.guild.channels.cache.get(LOG_CHANNEL_ID);
+    if (!logChannel) return;
+    const embed = new EmbedBuilder().setColor(0xEF4444).setTitle('👋 Member Left').setDescription(`${member.user.tag} left`)
+        .setThumbnail(member.user.displayAvatarURL()).setTimestamp();
+    await logChannel.send({ embeds: [embed] }).catch(() => {});
+});
+
+client.on('voiceStateUpdate', async (old, news) => {
+    if (old.channelId === news.channelId) return;
+    const member = old.member || news.member;
+    if (!member) return;
+    const logChannel = member.guild.channels.cache.get(LOG_CHANNEL_ID);
+    if (!logChannel) return;
+    let action = !old.channelId && news.channelId ? 'Joined Voice' : (old.channelId && !news.channelId ? 'Left Voice' : 'Moved Voice');
+    const embed = new EmbedBuilder().setColor(0x8B5CF6).setTitle(`🎤 ${action}`).setDescription(member.user.tag)
+        .addFields(
+            { name: 'From', value: old.channel?.name || 'None', inline: true },
+            { name: 'To', value: news.channel?.name || 'None', inline: true })
+        .setTimestamp();
+    await logChannel.send({ embeds: [embed] }).catch(() => {});
+});
+
+// Anti-spam/link
+client.on('messageCreate', async (message) => {
+    if (message.author.bot || !message.guild) return;
+    if (hasPermission(message.member)) return;
+    
+    if (checkSpam(message.author.id, message.channel.id)) {
+        await message.delete();
+        const warn = await message.channel.send(`${message.author}, please don't spam!`);
+        setTimeout(() => warn.delete(), 3000);
+        return;
+    }
+    if (containsLink(message.content)) {
+        await message.delete();
+        const warn = await message.channel.send(`${message.author}, links are not allowed!`);
+        setTimeout(() => warn.delete(), 5000);
+    }
+});
+
+// ============================================
+// INTERACTION HANDLER (existing)
+// ============================================
+client.on('interactionCreate', async (interaction) => {
+    if (!interaction.isButton()) return;
+    
+    if (interaction.customId === 'verify_button') {
+        const config = await getVerificationConfig(interaction.guild.id);
+        if (!config) {
+            return interaction.reply({ content: '❌ Verification not configured!', ephemeral: true });
+        }
+        
+        try {
+            if (config.auto_role && interaction.member.roles.cache.has(config.auto_role)) {
+                await interaction.member.roles.remove(config.auto_role);
+            }
+            await interaction.member.roles.add(config.verified_role);
+            
+            const embed = new EmbedBuilder()
+                .setColor(0x22C55E)
+                .setTitle('✅ Verification Successful')
+                .setDescription(`Welcome to ${interaction.guild.name}!`)
+                .setTimestamp();
+            await interaction.reply({ embeds: [embed], ephemeral: true });
+        } catch (error) {
+            await interaction.reply({ content: '❌ Verification failed.', ephemeral: true });
+        }
+    }
+    else if (interaction.customId === 'role_phone') {
+        const roles = await getReactionRoles(interaction.guild.id, interaction.message.id);
+        const phoneRole = roles.find(r => r.emoji === '📱');
+        if (phoneRole && phoneRole.role_id) {
+            const role = interaction.guild.roles.cache.get(phoneRole.role_id);
+            if (role) {
+                if (interaction.member.roles.cache.has(role.id)) {
+                    await interaction.member.roles.remove(role);
+                    await interaction.reply({ content: `✅ Removed ${role.name}`, ephemeral: true });
+                } else {
+                    await interaction.member.roles.add(role);
+                    await interaction.reply({ content: `✅ Added ${role.name}`, ephemeral: true });
+                }
+            }
+        }
+    }
+    else if (interaction.customId === 'role_pc') {
+        const roles = await getReactionRoles(interaction.guild.id, interaction.message.id);
+        const pcRole = roles.find(r => r.emoji === '💻');
+        if (pcRole && pcRole.role_id) {
+            const role = interaction.guild.roles.cache.get(pcRole.role_id);
+            if (role) {
+                if (interaction.member.roles.cache.has(role.id)) {
+                    await interaction.member.roles.remove(role);
+                    await interaction.reply({ content: `✅ Removed ${role.name}`, ephemeral: true });
+                } else {
+                    await interaction.member.roles.add(role);
+                    await interaction.reply({ content: `✅ Added ${role.name}`, ephemeral: true });
+                }
+            }
+        }
+    }
+    else if (interaction.customId === 'create_ticket') {
+        const existing = await getTicket(interaction.user.id, interaction.guild.id);
+        if (existing) {
+            return interaction.reply({ content: `❌ You have an open ticket: <#${existing.channel_id}>`, ephemeral: true });
+        }
+        
+        const config = await getTicketConfig(interaction.guild.id);
+        if (!config || !config.category) {
+            return interaction.reply({ content: '❌ Ticket system not configured!', ephemeral: true });
+        }
+        
+        const channel = await interaction.guild.channels.create({
+            name: `ticket-${interaction.user.username}`,
+            type: ChannelType.GuildText,
+            parent: config.category,
+            permissionOverwrites: [
+                { id: interaction.guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
+                { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory] },
+                ...(config.support_role ? [{ id: config.support_role, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory] }] : [])
+            ]
+        });
+        
+        await saveTicket(interaction.user.id, channel.id, interaction.guild.id);
         
         const embed = new EmbedBuilder()
-            .setColor(0x00ff88)
-            .setTitle('🏆 XP Leaderboard')
-            .setDescription(leaderboardText.join('\n'))
-            .setFooter({ text: 'Keep chatting to earn XP and rank up!' })
+            .setColor(0x5865F2)
+            .setTitle('🎫 Support Ticket')
+            .setDescription('Support will assist you shortly.')
             .setTimestamp();
         
-        await message.reply({ embeds: [embed] });
-    } catch (error) {
-        console.error('Leaderboard error:', error);
-        await sendError(message, 'Failed to load leaderboard.');
-    }
-}
-
-// ============================================
-// WELCOME SYSTEM
-// ============================================
-client.on('guildMemberAdd', async (member) => {
-    try {
-        const welcomeChannel = client.channels.cache.get(WELCOME_CHANNEL_ID);
-        if (!welcomeChannel) return;
-
-        const welcomeEmbed = new EmbedBuilder()
-            .setColor(0x4CAF50)
-            .setTitle(`🎉 Welcome to ${member.guild.name}! 🎉`)
-            .setDescription(
-                `${member.toString()} has joined the server!\n\n` +
-                `**Username:** ${member.user.username}\n` +
-                `**User ID:** ${member.id}\n\n` +
-                `✨ You are member #${member.guild.memberCount}\n\n` +
-                `📖 Please read the rules\n` +
-                `🎭 Pick your roles\n` +
-                `💬 Introduce yourself\n\n` +
-                `**Have fun and make new friends! 🎉**`
-            )
-            .setThumbnail(member.user.displayAvatarURL({ size: 1024, dynamic: true }))
-            .setFooter({ text: `ID: ${member.id} • Welcome!` })
-            .setTimestamp();
-
-        await welcomeChannel.send({ content: `${member.toString()}`, embeds: [welcomeEmbed] });
-        console.log(`✅ Welcome message sent for ${member.user.tag}`);
-    } catch (error) {
-        console.error('Welcome error:', error);
-    }
-});
-
-// ============================================
-// XP SYSTEM - Award XP for messages
-// ============================================
-client.on('messageCreate', async (message) => {
-    if (message.author.bot) return;
-    if (!message.guild) return;
-    
-    if (!message.content.startsWith('!')) {
-        const { earnedXP, leveledUp, newLevel } = awardXP(message.author.id);
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('close_ticket').setLabel('Close').setStyle(ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId('claim_ticket').setLabel('Claim').setStyle(ButtonStyle.Secondary)
+        );
         
-        if (leveledUp) {
-            const levelUpEmbed = new EmbedBuilder()
-                .setColor(0x00ff88)
-                .setTitle('🎉 LEVEL UP! 🎉')
-                .setDescription(`${message.author} has reached **Level ${newLevel}**!`)
-                .addFields(
-                    { name: '✨ Total XP', value: getUserXPData(message.author.id).totalXP.toLocaleString(), inline: true },
-                    { name: '📊 Messages', value: getUserXPData(message.author.id).messages.toLocaleString(), inline: true }
-                )
-                .setTimestamp();
-            
-            await message.channel.send({ embeds: [levelUpEmbed] }).catch(() => {});
+        await channel.send({ content: `${interaction.user}`, embeds: [embed], components: [row] });
+        await interaction.reply({ content: `✅ Ticket created: ${channel}`, ephemeral: true });
+    }
+    else if (interaction.customId === 'close_ticket') {
+        if (!hasPermission(interaction.member)) {
+            return interaction.reply({ content: '❌ No permission', ephemeral: true });
         }
+        await deleteTicket(interaction.user.id, interaction.guild.id);
+        await interaction.reply('🔒 Closing ticket...');
+        setTimeout(async () => {
+            await interaction.channel.delete();
+        }, 3000);
+    }
+    else if (interaction.customId === 'claim_ticket') {
+        if (!hasPermission(interaction.member)) {
+            return interaction.reply({ content: '❌ No permission', ephemeral: true });
+        }
+        const embed = new EmbedBuilder().setColor(0x22C55E).setTitle('🎫 Ticket Claimed').setDescription(`${interaction.user} claimed this ticket.`).setTimestamp();
+        await interaction.reply({ embeds: [embed] });
     }
 });
 
 // ============================================
-// COMMAND HANDLER
+// PREFIX COMMANDS
 // ============================================
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
     if (!message.content.startsWith('!')) return;
     
     const args = message.content.slice(1).trim().split(/ +/);
-    const command = args.shift().toLowerCase();
+    const cmd = args.shift().toLowerCase();
+    const { member, guild, channel } = message;
     
-    // Public commands (no permission needed)
-    if (command === 'help') return showHelp(message);
-    if (command === 'profile') {
-        const userId = args[0];
-        return showProfile(message, userId);
-    }
-    if (command === 'leaderboard') return showLeaderboard(message);
-    
-    // Moderation commands - check permission
-    const modCommands = ['ban', 'kick', 'timeout', 'unmute', 'clear', 'warn'];
-    if (modCommands.includes(command) && !hasModPermission(message.member)) {
-        return sendError(message, `You need the <@&${MOD_ROLE_ID}> role to use moderation commands!`);
+    const modCmds = ['ban', 'kick', 'mute', 'unmute', 'warn', 'clear', 'lock', 'unlock', 'giverole', 'removerole', 'unban', 'ann', 'anni', 'ticketsetup', 'ticket', 'giveaway', 'roltest', 'verif', 'sendpanel', 'verifstatus', 'resetverif'];
+    if (modCmds.includes(cmd) && !hasPermission(member)) {
+        return message.reply('❌ You need moderator permissions!');
     }
     
-    // ========== BAN ==========
-    if (command === 'ban') {
-        const userId = args[0];
-        if (!userId) return sendError(message, 'Usage: `!ban <userID> [reason]`');
-        
-        const target = await getTarget(message, userId);
-        if (!target) return sendError(message, 'User not found!');
-        if (!target.bannable) return sendError(message, 'I cannot ban this user!');
-        
-        const reason = args.slice(1).join(' ') || 'No reason provided';
-        
-        try {
-            await target.ban({ reason: `${reason} (Banned by ${message.author.tag})` });
-            await sendSuccess(message, 'Ban', target);
-            await sendLog(message, 'Ban', target, reason);
-        } catch (error) {
-            sendError(message, 'Failed to ban user.');
-        }
-    }
-    
-    // ========== KICK ==========
-    else if (command === 'kick') {
-        const userId = args[0];
-        if (!userId) return sendError(message, 'Usage: `!kick <userID> [reason]`');
-        
-        const target = await getTarget(message, userId);
-        if (!target) return sendError(message, 'User not found!');
-        if (!target.kickable) return sendError(message, 'I cannot kick this user!');
-        
-        const reason = args.slice(1).join(' ') || 'No reason provided';
-        
-        try {
-            await target.kick(`${reason} (Kicked by ${message.author.tag})`);
-            await sendSuccess(message, 'Kick', target);
-            await sendLog(message, 'Kick', target, reason);
-        } catch (error) {
-            sendError(message, 'Failed to kick user.');
-        }
-    }
-    
-    // ========== TIMEOUT ==========
-    else if (command === 'timeout') {
-        const userId = args[0];
-        const timeAmount = args[1];
-        
-        if (!userId || !timeAmount) {
-            return sendError(message, 'Usage: `!timeout <userID> <time> [reason]`\nExamples: `!timeout 123456789 10m`, `!timeout 123456789 1h`, `!timeout 123456789 1d`');
-        }
-        
-        const target = await getTarget(message, userId);
-        if (!target) return sendError(message, 'User not found!');
-        if (!target.moderatable) return sendError(message, 'I cannot timeout this user!');
-        
-        const durationMs = parseTime(timeAmount);
-        if (!durationMs) return sendError(message, 'Invalid time format! Use: 10m, 1h, 1d');
-        if (durationMs > 28 * 24 * 60 * 60 * 1000) return sendError(message, 'Timeout cannot be longer than 28 days!');
-        
-        const reason = args.slice(2).join(' ') || 'No reason provided';
-        const durationReadable = formatDuration(durationMs);
-        
-        try {
-            await target.timeout(durationMs, `${reason} (Timed out by ${message.author.tag})`);
-            await sendSuccess(message, `Timeout (${durationReadable})`, target, durationReadable);
-            await sendLog(message, 'Timeout', target, reason);
-        } catch (error) {
-            sendError(message, 'Failed to timeout user.');
-        }
-    }
-    
-    // ========== UNMUTE ==========
-    else if (command === 'unmute') {
-        const userId = args[0];
-        if (!userId) return sendError(message, 'Usage: `!unmute <userID> [reason]`');
-        
-        const target = await getTarget(message, userId);
-        if (!target) return sendError(message, 'User not found!');
-        if (!target.moderatable) return sendError(message, 'I cannot remove timeout from this user!');
-        if (!target.communicationDisabledUntil) return sendError(message, 'This user is not currently timed out!');
-        
-        const reason = args.slice(1).join(' ') || 'No reason provided';
-        
-        try {
-            await target.timeout(null);
-            await sendSuccess(message, 'Unmute', target);
-            await sendLog(message, 'Unmute', target, reason);
-        } catch (error) {
-            sendError(message, 'Failed to unmute user.');
-        }
-    }
-    
-    // ========== CLEAR ==========
-    else if (command === 'clear') {
-        const amount = parseInt(args[0]);
-        if (!amount || amount < 1 || amount > 100) return sendError(message, 'Usage: `!clear <1-100>`');
-        
-        try {
-            const deleted = await message.channel.bulkDelete(amount, true);
-            const confirmEmbed = new EmbedBuilder()
-                .setColor(0x4CAF50)
-                .setTitle('✅ Messages Cleared')
-                .setDescription(`Deleted ${deleted.size} messages`)
-                .setTimestamp();
-            
-            const reply = await message.reply({ embeds: [confirmEmbed] });
-            setTimeout(() => reply.delete(), 3000);
-            if (LOG_CHANNEL_ID) {
-                await sendLog(message, `Clear (${deleted.size} messages)`, { id: 'N/A', tag: 'Channel' }, `Deleted ${deleted.size} messages`);
-            }
-        } catch (error) {
-            sendError(message, 'Failed to clear messages. Messages may be older than 14 days!');
-        }
-    }
-    
-    // ========== WARN ==========
-    else if (command === 'warn') {
-        const userId = args[0];
-        if (!userId) return sendError(message, 'Usage: `!warn <userID> [reason]`');
-        
-        const target = await getTarget(message, userId);
-        if (!target) return sendError(message, 'User not found!');
-        
-        const reason = args.slice(1).join(' ') || 'No reason provided';
-        
-        const warnEmbed = new EmbedBuilder()
-            .setColor(0xFFA500)
-            .setTitle('⚠️ Warning')
-            .setDescription(`You have been warned in **${message.guild.name}**`)
+    // HELP (updated with !info)
+    if (cmd === 'help') {
+        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('🛡️ Bot Commands')
+            .setDescription('**Moderation:** `!ban`, `!kick`, `!mute`, `!unmute`, `!warn`, `!clear`, `!lock`, `!unlock`, `!giverole`, `!removerole`, `!unban`')
             .addFields(
-                { name: 'Moderator', value: message.author.tag, inline: true },
-                { name: 'Reason', value: reason, inline: true }
+                { name: 'Info', value: '`!userinfo`, `!serverinfo`, `!avatar`, `!info`', inline: false },
+                { name: 'Announcements', value: '`!ann <msg>`, `!anni`', inline: false },
+                { name: 'Ticket System', value: '`!ticketsetup`, `!ticket`', inline: false },
+                { name: 'Reaction Roles', value: '`!roltest`', inline: false },
+                { name: 'Verification', value: '`!verif`, `!sendpanel`, `!verifstatus`, `!resetverif`', inline: false },
+                { name: 'Profile Card', value: '`!info` - Generates a professional profile image', inline: false },
+                { name: 'Other', value: '`!suggest`, `!giveaway`', inline: false }
             )
             .setTimestamp();
-        
-        try {
-            await target.send({ embeds: [warnEmbed] }).catch(() => {});
-            await sendSuccess(message, 'Warning', target);
-            await sendLog(message, 'Warning', target, reason);
-        } catch (error) {
-            sendError(message, 'Failed to warn user.');
-        }
+        return message.reply({ embeds: [embed] });
     }
     
-    // ========== PING ==========
-    else if (command === 'ping') {
-        const embed = new EmbedBuilder()
-            .setColor(0x5865F2)
-            .setTitle('🏓 Pong!')
-            .addFields(
-                { name: 'Latency', value: `${Date.now() - message.createdTimestamp}ms`, inline: true },
-                { name: 'API Latency', value: `${Math.round(client.ws.ping)}ms`, inline: true }
-            )
-            .setTimestamp();
-        await message.reply({ embeds: [embed] });
-    }
-    
-    // ========== AVATAR ==========
-    else if (command === 'avatar') {
-        const userId = args[0];
-        let user = message.author;
+    // ========== NEW !INFO COMMAND ==========
+    if (cmd === 'info') {
+        const targetId = args[0];
+        let targetUser = member.user;
+        let targetMember = member;
         
-        if (userId) {
+        if (targetId) {
             try {
-                const fetchedUser = await client.users.fetch(userId);
-                if (fetchedUser) user = fetchedUser;
-            } catch (error) {}
+                const fetchedUser = await client.users.fetch(targetId);
+                if (fetchedUser) {
+                    targetUser = fetchedUser;
+                    targetMember = await getMember(guild, targetId);
+                }
+            } catch (error) {
+                return message.reply('❌ User not found!');
+            }
         }
         
-        const embed = new EmbedBuilder()
-            .setColor(0x5865F2)
-            .setTitle(`${user.tag}'s Avatar`)
-            .setImage(user.displayAvatarURL({ size: 1024, dynamic: true }))
-            .setTimestamp();
-        await message.reply({ embeds: [embed] });
+        const stats = await getUserStats(targetUser.id);
+        
+        // Generate the profile card image
+        await message.channel.sendTyping();
+        
+        try {
+            const imageBuffer = await generateProfileCard(targetUser, stats);
+            const attachment = { attachment: imageBuffer, name: `profile_${targetUser.id}.png` };
+            
+            await message.reply({ files: [attachment] });
+        } catch (error) {
+            console.error('Profile card generation error:', error);
+            message.reply('❌ Failed to generate profile card. Please try again later.');
+        }
+        return;
     }
     
-    // ========== USERINFO ==========
-    else if (command === 'userinfo') {
-        const userId = args[0];
-        let member = message.member;
-        
-        if (userId) {
-            const target = await getTarget(message, userId);
-            if (target) member = target;
-        }
-        
-        const embed = new EmbedBuilder()
-            .setColor(0x5865F2)
-            .setTitle(member.user.tag)
-            .setThumbnail(member.user.displayAvatarURL())
+    // VERIFICATION
+    if (cmd === 'verif') {
+        await startVerificationSetup(message);
+    }
+    else if (cmd === 'resetverif') {
+        db.run(`DELETE FROM verification_config WHERE guild_id = ?`, [guild.id], () => {
+            message.reply('✅ Verification system reset!');
+        });
+    }
+    else if (cmd === 'sendpanel') {
+        const config = await getVerificationConfig(guild.id);
+        if (!config) return message.reply('❌ Not configured!');
+        const vc = guild.channels.cache.get(config.channel);
+        if (!vc) return message.reply('❌ Channel not found!');
+        await sendVerificationPanel(vc);
+        await message.reply(`✅ Panel sent to ${vc}`);
+    }
+    else if (cmd === 'verifstatus') {
+        const config = await getVerificationConfig(guild.id);
+        if (!config) return message.reply('❌ Not configured!');
+        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('Verification Status')
             .addFields(
-                { name: '🆔 ID', value: member.id, inline: true },
-                { name: '📅 Joined Server', value: `<t:${Math.floor(member.joinedTimestamp / 1000)}:R>`, inline: true },
-                { name: '📅 Joined Discord', value: `<t:${Math.floor(member.user.createdTimestamp / 1000)}:R>`, inline: true }
-            );
-        
-        if (member.communicationDisabledUntil) {
-            embed.addFields({ name: '🔇 Timed out until', value: `<t:${Math.floor(member.communicationDisabledUntil / 1000)}:R>`, inline: false });
-        }
-        
-        embed.setTimestamp();
+                { name: 'Auto Role', value: `<@&${config.auto_role}>`, inline: true },
+                { name: 'Verified Role', value: `<@&${config.verified_role}>`, inline: true },
+                { name: 'Channel', value: `<#${config.channel}>`, inline: true }
+            ).setTimestamp();
         await message.reply({ embeds: [embed] });
     }
     
-    // ========== SERVERINFO ==========
-    else if (command === 'serverinfo') {
-        const guild = message.guild;
-        const embed = new EmbedBuilder()
-            .setColor(0x5865F2)
-            .setTitle(guild.name)
+    // TICKET
+    else if (cmd === 'ticketsetup') {
+        await startTicketSetup(message);
+    }
+    else if (cmd === 'ticket') {
+        const config = await getTicketConfig(guild.id);
+        if (!config) return message.reply('❌ Not configured!');
+        const pc = guild.channels.cache.get(config.panel_channel);
+        if (!pc) return message.reply('❌ Channel not found!');
+        await createTicketPanel(pc, config);
+        await message.reply(`✅ Panel sent to ${pc}`);
+    }
+    
+    // REACTION ROLES
+    else if (cmd === 'roltest') {
+        await startReactionSetup(message);
+    }
+    
+    // MODERATION COMMANDS
+    else if (cmd === 'ban') {
+        const id = args[0];
+        if (!id) return message.reply('Usage: `!ban <userID> [reason]`');
+        const target = await getMember(guild, id);
+        if (!target) return message.reply('❌ User not found');
+        const reason = args.slice(1).join(' ') || 'No reason';
+        await target.ban({ reason });
+        await message.reply(`✅ Banned ${target.user.tag}`);
+        await sendLog(guild, 'BAN', target.user, member.user, reason);
+    }
+    else if (cmd === 'kick') {
+        const id = args[0];
+        if (!id) return message.reply('Usage: `!kick <userID> [reason]`');
+        const target = await getMember(guild, id);
+        if (!target) return message.reply('❌ User not found');
+        const reason = args.slice(1).join(' ') || 'No reason';
+        await target.kick(reason);
+        await message.reply(`✅ Kicked ${target.user.tag}`);
+        await sendLog(guild, 'KICK', target.user, member.user, reason);
+    }
+    else if (cmd === 'mute') {
+        const id = args[0];
+        const time = args[1];
+        if (!id || !time) return message.reply('Usage: `!mute <id> <time> [reason]`');
+        const target = await getMember(guild, id);
+        if (!target) return message.reply('❌ User not found');
+        const ms = parseTime(time);
+        if (!ms) return message.reply('❌ Invalid time');
+        const reason = args.slice(2).join(' ') || 'No reason';
+        await target.timeout(ms, reason);
+        await message.reply(`✅ Muted ${target.user.tag} for ${formatTime(ms)}`);
+        await sendLog(guild, 'MUTE', target.user, member.user, reason);
+    }
+    else if (cmd === 'unmute') {
+        const id = args[0];
+        if (!id) return message.reply('Usage: `!unmute <id>`');
+        const target = await getMember(guild, id);
+        if (!target) return message.reply('❌ User not found');
+        await target.timeout(null);
+        await message.reply(`✅ Unmuted ${target.user.tag}`);
+        await sendLog(guild, 'UNMUTE', target.user, member.user, 'No reason');
+    }
+    else if (cmd === 'warn') {
+        const id = args[0];
+        if (!id) return message.reply('Usage: `!warn <id> [reason]`');
+        const target = await getMember(guild, id);
+        if (!target) return message.reply('❌ User not found');
+        const reason = args.slice(1).join(' ') || 'No reason';
+        await addWarning(target.id, guild.id, reason, member.user.tag);
+        const count = await getWarningCount(target.id, guild.id);
+        await message.reply(`✅ Warned ${target.user.tag} (Total: ${count})`);
+        await sendLog(guild, 'WARN', target.user, member.user, reason);
+    }
+    else if (cmd === 'clear') {
+        const amount = parseInt(args[0]);
+        if (!amount || amount < 1 || amount > 100) return message.reply('Usage: `!clear <1-100>`');
+        try {
+            const fetched = await channel.messages.fetch({ limit: amount });
+            const deleted = await channel.bulkDelete(fetched);
+            const reply = await message.reply(`✅ Deleted ${deleted.size} messages`);
+            setTimeout(() => reply.delete(), 3000);
+        } catch (e) { message.reply('❌ Failed'); }
+    }
+    else if (cmd === 'lock') {
+        await channel.permissionOverwrites.edit(guild.id, { SendMessages: false });
+        await message.reply('🔒 Channel locked');
+    }
+    else if (cmd === 'unlock') {
+        await channel.permissionOverwrites.edit(guild.id, { SendMessages: null });
+        await message.reply('🔓 Channel unlocked');
+    }
+    else if (cmd === 'giverole') {
+        const uid = args[0], rid = args[1];
+        if (!uid || !rid) return message.reply('Usage: `!giverole <userID> <roleID>`');
+        const target = await getMember(guild, uid);
+        const role = guild.roles.cache.get(rid);
+        if (!target || !role) return message.reply('❌ Not found');
+        await target.roles.add(role);
+        await message.reply(`✅ Added ${role.name} to ${target.user.tag}`);
+    }
+    else if (cmd === 'removerole') {
+        const uid = args[0], rid = args[1];
+        if (!uid || !rid) return message.reply('Usage: `!removerole <userID> <roleID>`');
+        const target = await getMember(guild, uid);
+        const role = guild.roles.cache.get(rid);
+        if (!target || !role) return message.reply('❌ Not found');
+        await target.roles.remove(role);
+        await message.reply(`✅ Removed ${role.name} from ${target.user.tag}`);
+    }
+    else if (cmd === 'unban') {
+        const uid = args[0];
+        if (!uid) return message.reply('Usage: `!unban <userID>`');
+        try {
+            const user = await client.users.fetch(uid);
+            await guild.members.unban(user);
+            await message.reply(`✅ Unbanned ${user.tag}`);
+        } catch { message.reply('❌ Not found'); }
+    }
+    
+    // INFO
+    else if (cmd === 'userinfo') {
+        const id = args[0];
+        const target = id ? await getMember(guild, id) : member;
+        if (!target) return message.reply('❌ Not found');
+        const warnCount = await getWarningCount(target.id, guild.id);
+        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(target.user.tag)
+            .setThumbnail(target.user.displayAvatarURL())
+            .addFields(
+                { name: 'ID', value: target.id, inline: true },
+                { name: 'Joined Server', value: `<t:${Math.floor(target.joinedTimestamp / 1000)}:R>`, inline: true },
+                { name: 'Warnings', value: `${warnCount}`, inline: true }
+            ).setTimestamp();
+        await message.reply({ embeds: [embed] });
+    }
+    else if (cmd === 'serverinfo') {
+        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(guild.name)
             .setThumbnail(guild.iconURL())
             .addFields(
-                { name: '👑 Owner', value: `<@${guild.ownerId}>`, inline: true },
-                { name: '👥 Members', value: `${guild.memberCount}`, inline: true },
-                { name: '📅 Created', value: `<t:${Math.floor(guild.createdTimestamp / 1000)}:R>`, inline: true },
-                { name: '💬 Channels', value: `${guild.channels.cache.size}`, inline: true },
-                { name: '🎭 Roles', value: `${guild.roles.cache.size}`, inline: true }
-            )
-            .setTimestamp();
+                { name: 'Owner', value: `<@${guild.ownerId}>`, inline: true },
+                { name: 'Members', value: `${guild.memberCount}`, inline: true },
+                { name: 'Channels', value: `${guild.channels.cache.size}`, inline: true }
+            ).setTimestamp();
+        await message.reply({ embeds: [embed] });
+    }
+    else if (cmd === 'avatar') {
+        const id = args[0];
+        const user = id ? await client.users.fetch(id).catch(() => null) : message.author;
+        if (!user) return message.reply('❌ Not found');
+        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(`${user.tag}'s Avatar`)
+            .setImage(user.displayAvatarURL({ size: 1024 })).setTimestamp();
         await message.reply({ embeds: [embed] });
     }
     
-    // ========== SAY ==========
-    else if (command === 'say') {
+    // ANNOUNCEMENTS
+    else if (cmd === 'ann') {
         const text = args.join(' ');
-        if (!text) return sendError(message, 'Usage: `!say <message>`');
-        await message.channel.send(text);
-        await message.delete();
+        if (!text) return message.reply('Usage: `!ann <message>`');
+        await message.delete().catch(() => {});
+        await sendProfessionalAnnouncement(channel, text);
+    }
+    else if (cmd === 'anni') {
+        await message.delete().catch(() => {});
+        await sendWelcomeAnnouncement(channel);
+    }
+    
+    // SUGGEST
+    else if (cmd === 'suggest') {
+        const suggestion = args.join(' ');
+        if (!suggestion) return message.reply('Usage: `!suggest <message>`');
+        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('💡 Suggestion').setDescription(suggestion)
+            .setAuthor({ name: member.user.tag }).setTimestamp();
+        const msg = await channel.send({ embeds: [embed] });
+        await msg.react('✅'); await msg.react('❌');
+        saveSuggestion(msg.id, member.user.id, suggestion);
+        await message.reply('✅ Suggestion submitted!');
+    }
+    
+    // GIVEAWAY
+    else if (cmd === 'giveaway') {
+        const prize = args[0];
+        const duration = parseInt(args[1]);
+        const winners = parseInt(args[2]);
+        if (!prize || !duration || !winners) return message.reply('Usage: `!giveaway <prize> <minutes> <winners>`');
+        const endTime = Date.now() + (duration * 60 * 1000);
+        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('🎉 GIVEAWAY 🎉')
+            .setDescription(`**Prize:** ${prize}\n**Winners:** ${winners}\n**Duration:** ${duration} minutes`)
+            .setFooter({ text: 'React with 🎉 to enter!' }).setTimestamp(endTime);
+        const msg = await channel.send({ embeds: [embed] });
+        await msg.react('🎉');
+        saveGiveaway(msg.id, channel.id, prize, winners, endTime);
+        
+        setTimeout(async () => {
+            const fetched = await msg.fetch().catch(() => null);
+            if (!fetched) return;
+            const reaction = fetched.reactions.cache.get('🎉');
+            let participants = reaction ? (await reaction.users.fetch()).filter(u => !u.bot) : [];
+            const selected = [];
+            for (let i = 0; i < Math.min(winners, participants.size); i++) {
+                const idx = Math.floor(Math.random() * participants.size);
+                selected.push([...participants][idx]);
+            }
+            const resultEmbed = new EmbedBuilder().setColor(selected.length ? 0x22C55E : 0xEF4444)
+                .setTitle('🎉 GIVEAWAY ENDED 🎉')
+                .setDescription(`**Prize:** ${prize}\n**Winners:** ${selected.length ? selected.map(w => w.toString()).join(', ') : 'No winners'}`)
+                .setTimestamp();
+            await channel.send({ embeds: [resultEmbed] });
+        }, duration * 60 * 1000);
+        
+        await message.reply(`✅ Giveaway started for **${prize}**!`);
     }
 });
 
 // ============================================
 // READY EVENT
 // ============================================
-client.once('ready', async () => {
-    console.log(`✅ Logged in as ${client.user.tag}`);
-    console.log(`🎮 XP System Active - Users earn XP for messages!`);
-    console.log(`🤖 Bot is ready with ${client.guilds.cache.size} guild(s)`);
-    
-    if (VOICE_CHANNEL_ID) {
-        setTimeout(async () => {
-            await joinVoiceChannelProper();
-        }, 3000);
-    }
+client.once('ready', () => {
+    console.log(`✅ ${client.user.tag} is online!`);
+    console.log(`📋 Prefix: !`);
+    console.log(`🖼️ Profile card generator ready!`);
+    client.user.setActivity('!help', { type: 3 });
 });
 
 // ============================================
 // ERROR HANDLING
 // ============================================
-process.on('unhandledRejection', (error) => {
-    console.error('❌ Unhandled rejection:', error);
-});
-
-process.on('uncaughtException', (error) => {
-    console.error('❌ Uncaught exception:', error);
-});
+process.on('unhandledRejection', (err) => console.error('Unhandled rejection:', err.message));
+process.on('uncaughtException', (err) => console.error('Uncaught exception:', err.message));
+process.on('SIGINT', () => { db.close(() => process.exit(0)); });
 
 // ============================================
 // START BOT
