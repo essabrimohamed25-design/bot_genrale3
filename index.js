@@ -45,10 +45,10 @@ const client = new Client({
 });
 
 // ============================================
-// STORAGE
+// STORAGE - PERSISTENT VOICE TRACKING
 // ============================================
 const spamMap = new Map();
-const voiceMap = new Map();
+const voiceStartTimes = new Map(); // userId -> { startTime, channelId }
 
 // ============================================
 // USER STATS FUNCTIONS
@@ -61,20 +61,41 @@ function getUserStats(userId) {
     });
 }
 
-function updateStats(userId, messages = 0, voice = 0) {
+function updateMessageStats(userId, messages = 1) {
     db.get(`SELECT * FROM user_stats WHERE user_id = ?`, [userId], (err, row) => {
         if (!row) {
-            db.run(`INSERT INTO user_stats (user_id, messages, voice_minutes, xp, level) VALUES (?, ?, ?, ?, 1)`, [userId, messages, voice, messages]);
+            db.run(`INSERT INTO user_stats (user_id, messages, voice_minutes, xp, level) VALUES (?, ?, ?, ?, 1)`, [userId, messages, 0, messages]);
         } else {
-            let newXp = row.xp + messages + Math.floor(voice / 60);
+            let newXp = row.xp + messages;
             let newLevel = row.level;
             while (newXp >= newLevel * 100) {
                 newXp -= newLevel * 100;
                 newLevel++;
             }
-            db.run(`UPDATE user_stats SET messages = messages + ?, voice_minutes = voice_minutes + ?, xp = ?, level = ? WHERE user_id = ?`,
-                [messages, voice, newXp, newLevel, userId]);
+            db.run(`UPDATE user_stats SET messages = messages + ?, xp = ?, level = ? WHERE user_id = ?`,
+                [messages, newXp, newLevel, userId]);
         }
+    });
+}
+
+function updateVoiceStats(userId, additionalMinutes) {
+    return new Promise((resolve) => {
+        db.get(`SELECT * FROM user_stats WHERE user_id = ?`, [userId], (err, row) => {
+            if (!row) {
+                db.run(`INSERT INTO user_stats (user_id, messages, voice_minutes, xp, level) VALUES (?, 0, ?, ?, 1)`, 
+                    [userId, additionalMinutes, Math.floor(additionalMinutes / 60)], () => resolve());
+            } else {
+                const newVoiceMinutes = row.voice_minutes + additionalMinutes;
+                let newXp = row.xp + Math.floor(additionalMinutes / 60);
+                let newLevel = row.level;
+                while (newXp >= newLevel * 100) {
+                    newXp -= newLevel * 100;
+                    newLevel++;
+                }
+                db.run(`UPDATE user_stats SET voice_minutes = ?, xp = ?, level = ? WHERE user_id = ?`,
+                    [newVoiceMinutes, newXp, newLevel, userId], () => resolve());
+            }
+        });
     });
 }
 
@@ -85,6 +106,115 @@ function getAllStats(guildId) {
         });
     });
 }
+
+// ============================================
+// VOICE TRACKING - FIXED
+// ============================================
+// Track when user joins a voice channel
+client.on('voiceStateUpdate', async (oldState, newState) => {
+    const userId = newState.member?.id || oldState.member?.id;
+    if (!userId) return;
+
+    // User JOINED a voice channel (was not in any, now is in one)
+    if (!oldState.channelId && newState.channelId) {
+        voiceStartTimes.set(userId, {
+            startTime: Date.now(),
+            channelId: newState.channelId
+        });
+        console.log(`🎤 ${newState.member?.user?.tag} joined voice at ${new Date().toLocaleTimeString()}`);
+    }
+    
+    // User LEFT a voice channel (was in one, now not in any)
+    else if (oldState.channelId && !newState.channelId) {
+        const session = voiceStartTimes.get(userId);
+        if (session) {
+            const durationMs = Date.now() - session.startTime;
+            const durationMinutes = Math.floor(durationMs / 60000);
+            
+            if (durationMinutes > 0) {
+                await updateVoiceStats(userId, durationMinutes);
+                console.log(`🎤 ${oldState.member?.user?.tag} left voice. Added ${durationMinutes} minutes. Total: ${durationMinutes} min this session`);
+            } else {
+                console.log(`🎤 ${oldState.member?.user?.tag} left voice. Session too short (${Math.floor(durationMs / 1000)}s) - not counted`);
+            }
+            voiceStartTimes.delete(userId);
+        } else {
+            console.log(`⚠️ No start time found for ${oldState.member?.user?.tag} when leaving`);
+        }
+    }
+    
+    // User MOVED between voice channels
+    else if (oldState.channelId && newState.channelId && oldState.channelId !== newState.channelId) {
+        const session = voiceStartTimes.get(userId);
+        if (session) {
+            // Calculate time spent in previous channel
+            const durationMs = Date.now() - session.startTime;
+            const durationMinutes = Math.floor(durationMs / 60000);
+            
+            if (durationMinutes > 0) {
+                await updateVoiceStats(userId, durationMinutes);
+                console.log(`🎤 ${newState.member?.user?.tag} moved channels. Added ${durationMinutes} minutes from previous channel`);
+            }
+            
+            // Reset start time for new channel
+            voiceStartTimes.set(userId, {
+                startTime: Date.now(),
+                channelId: newState.channelId
+            });
+        } else {
+            // No tracking found, start new tracking
+            voiceStartTimes.set(userId, {
+                startTime: Date.now(),
+                channelId: newState.channelId
+            });
+            console.log(`🎤 Started tracking ${newState.member?.user?.tag} after channel move`);
+        }
+    }
+});
+
+// Periodic check for users still in voice (backup save every 5 minutes)
+setInterval(async () => {
+    if (voiceStartTimes.size === 0) return;
+    
+    console.log(`🔄 Voice check: Tracking ${voiceStartTimes.size} users in voice`);
+    
+    for (const [userId, session] of voiceStartTimes) {
+        const durationMs = Date.now() - session.startTime;
+        const durationMinutes = Math.floor(durationMs / 60000);
+        
+        if (durationMinutes >= 5) {
+            // Save every 5 minutes of continuous voice time
+            await updateVoiceStats(userId, 5);
+            // Reset the start time to now after saving
+            voiceStartTimes.set(userId, {
+                startTime: Date.now(),
+                channelId: session.channelId
+            });
+            console.log(`🔄 Auto-saved 5 minutes for user ${userId}`);
+        }
+    }
+}, 300000); // Check every 5 minutes
+
+// Save voice time on bot shutdown
+async function saveAllVoiceTime() {
+    console.log(`💾 Saving voice time for ${voiceStartTimes.size} users before shutdown...`);
+    for (const [userId, session] of voiceStartTimes) {
+        const durationMs = Date.now() - session.startTime;
+        const durationMinutes = Math.floor(durationMs / 60000);
+        if (durationMinutes > 0) {
+            await updateVoiceStats(userId, durationMinutes);
+            console.log(`💾 Saved ${durationMinutes} minutes for user ${userId}`);
+        }
+    }
+}
+
+// ============================================
+// MESSAGE TRACKING
+// ============================================
+client.on('messageCreate', async (msg) => {
+    if (msg.author.bot || !msg.guild) return;
+    updateMessageStats(msg.author.id, 1);
+});
 
 // ============================================
 // HELPER FUNCTIONS
@@ -311,27 +441,6 @@ function saveSuggestion(mid, uid, sug) { db.run(`INSERT INTO suggestions (messag
 function saveGiveaway(mid, cid, prize, winners, end) { db.run(`INSERT INTO giveaways (message_id, channel_id, prize, winners, end_time) VALUES (?, ?, ?, ?, ?)`, [mid, cid, prize, winners, end]); }
 
 // ============================================
-// TRACKING
-// ============================================
-client.on('messageCreate', async (msg) => {
-    if (msg.author.bot || !msg.guild) return;
-    updateStats(msg.author.id, 1, 0);
-});
-client.on('voiceStateUpdate', async (old, neu) => {
-    const uid = neu.member?.id || old.member?.id;
-    if (!uid) return;
-    if (!old.channelId && neu.channelId) voiceMap.set(uid, Date.now());
-    else if (old.channelId && !neu.channelId) {
-        const start = voiceMap.get(uid);
-        if (start) {
-            const mins = Math.floor((Date.now() - start) / 60000);
-            if (mins > 0) updateStats(uid, 0, mins);
-            voiceMap.delete(uid);
-        }
-    }
-});
-
-// ============================================
 // LOGS
 // ============================================
 client.on('messageDelete', async (msg) => {
@@ -475,10 +584,10 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 // ============================================
-// STATS COMMANDS (New)
+// STATS COMMANDS
 // ============================================
 
-// !info - Full user stats embed (Carl-bot style)
+// !info - Full user stats embed
 async function cmdInfo(message, targetUser) {
     const stats = await getUserStats(targetUser.id);
     const member = await getMember(message.guild, targetUser.id);
@@ -489,7 +598,6 @@ async function cmdInfo(message, targetUser) {
     const xpNeeded = stats.level * 100;
     const xpProgress = Math.floor((stats.xp / xpNeeded) * 100);
     
-    // Get rank in server
     const allStats = await getAllStats(message.guild.id);
     const sorted = allStats.sort((a, b) => b.xp - a.xp);
     const rank = sorted.findIndex(s => s.user_id === targetUser.id) + 1;
@@ -633,7 +741,7 @@ client.on('messageCreate', async (message) => {
         return message.reply({ embeds: [embed] });
     }
 
-    // ========== NEW STATS COMMANDS ==========
+    // ========== STATS COMMANDS ==========
     if (cmd === 'info') {
         let target = member.user;
         if (args[0]) { try { target = await client.users.fetch(args[0]); } catch(e) { return message.reply('❌ User not found'); } }
@@ -669,20 +777,13 @@ client.on('messageCreate', async (message) => {
     }
 
     // ========== OLD EXISTING COMMANDS ==========
-    // VERIFICATION
     if (cmd === 'verif') { await setupVerif(message); }
     else if (cmd === 'resetverif') { db.run(`DELETE FROM verification_config WHERE guild_id = ?`, [guild.id]); message.reply('✅ Reset'); }
     else if (cmd === 'sendpanel') { const cfg = await getVerif(guild.id); if (!cfg) return message.reply('❌ Not configured'); const ch = guild.channels.cache.get(cfg.channel); if (ch) await sendVerifPanel(ch); message.reply(`✅ Panel sent to ${ch}`); }
     else if (cmd === 'verifstatus') { const cfg = await getVerif(guild.id); if (!cfg) return message.reply('❌ Not configured'); const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('Verification Status').addFields({ name: 'Auto Role', value: `<@&${cfg.auto_role}>`, inline: true }, { name: 'Verified Role', value: `<@&${cfg.verified_role}>`, inline: true }, { name: 'Channel', value: `<#${cfg.channel}>`, inline: true }); message.reply({ embeds: [embed] }); }
-
-    // TICKET
     else if (cmd === 'ticketsetup') { await setupTicket(message); }
     else if (cmd === 'ticket') { const cfg = await getTicketConfig(guild.id); if (!cfg) return message.reply('❌ Not configured'); const pc = guild.channels.cache.get(cfg.panel_channel); if (pc) await sendTicketPanel(pc, cfg); message.reply(`✅ Panel sent to ${pc}`); }
-
-    // REACTION ROLES
     else if (cmd === 'roltest') { await setupRR(message); }
-
-    // MODERATION
     else if (cmd === 'ban') {
         const id = args[0];
         if (!id) return message.reply('Usage: `!ban <id> [reason]`');
@@ -842,21 +943,32 @@ client.on('messageCreate', async (message) => {
 });
 
 // ============================================
+// SHUTDOWN HANDLER - Save voice time before exit
+// ============================================
+async function gracefulShutdown() {
+    console.log('🛑 Shutting down gracefully...');
+    await saveAllVoiceTime();
+    db.close(() => {
+        console.log('✅ Database closed');
+        process.exit(0);
+    });
+}
+
+process.on('SIGINT', gracefulShutdown);
+process.on('SIGTERM', gracefulShutdown);
+process.on('unhandledRejection', (err) => console.error('❌ Error:', err.message));
+process.on('uncaughtException', (err) => console.error('❌ Error:', err.message));
+
+// ============================================
 // READY EVENT
 // ============================================
 client.once('ready', () => {
     console.log(`✅ ${client.user.tag} is online!`);
     console.log(`📋 Prefix: !`);
+    console.log(`🎤 Voice tracking system ACTIVE`);
     console.log(`📊 Stats commands: !info, !rank, !top, !messages, !voice`);
     console.log(`🛡️ Moderation Bot Ready`);
     client.user.setActivity('!help', { type: 3 });
 });
-
-// ============================================
-// ERROR HANDLING
-// ============================================
-process.on('unhandledRejection', (err) => console.error('❌ Error:', err.message));
-process.on('uncaughtException', (err) => console.error('❌ Error:', err.message));
-process.on('SIGINT', () => { db.close(() => process.exit(0)); });
 
 client.login(BOT_TOKEN);
