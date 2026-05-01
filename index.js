@@ -48,35 +48,32 @@ const activeFreeGameSessions = new Map();
 const sentGamesCache = new Set();
 
 // ============================================
-// FREE GAMES LIST (Verified Working)
+// FREE GAMES LIST
 // ============================================
 const FREE_STEAM_GAMES = [
-    { id: 730, title: "Counter-Strike 2", desc: "CS2 is a free-to-play competitive first-person shooter. Master the art of tactical gameplay.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/730/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/730/CounterStrike_2/" },
-    { id: 570, title: "Dota 2", desc: "The most popular MOBA game. Choose from over 100 heroes and battle in epic 5v5 matches.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/570/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/570/Dota_2/" },
-    { id: 440, title: "Team Fortress 2", desc: "Class-based team shooter with 9 unique classes. One of the most beloved FPS games ever.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/440/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/440/Team_Fortress_2/" },
-    { id: 1172470, title: "Apex Legends", desc: "Battle royale shooter with unique legends. Squad up and be the last team standing.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1172470/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/1172470/Apex_Legends/" },
-    { id: 1085660, title: "Destiny 2", desc: "First-person action MMO. Become a Guardian and defend humanity.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1085660/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/1085660/Destiny_2/" },
-    { id: 444090, title: "Paladins", desc: "Fantasy team-based shooter. Choose from over 40 champions.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/444090/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/444090/Paladins/" },
-    { id: 230410, title: "Warframe", desc: "Co-op space ninja game. Master the Warframes and explore the solar system.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/230410/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/230410/Warframe/" },
-    { id: 2169380, title: "The Finals", desc: "High-stakes competitive shooter. Fight in destructible arenas.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/2169380/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/2169380/THE_FINALS/" },
-    { id: 1477560, title: "Rocket League", desc: "High-powered hybrid of arcade soccer and driving. Free to play!", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1477560/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/1477560/Rocket_League/" },
-    { id: 1238840, title: "PUBG: BATTLEGROUNDS", desc: "Battle royale where 100 players fight to be the last one standing.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1238840/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/1238840/PUBG_BATTLEGROUNDS/" }
+    { id: 730, title: "Counter-Strike 2", desc: "CS2 is a free-to-play competitive first-person shooter.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/730/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/730/CounterStrike_2/" },
+    { id: 570, title: "Dota 2", desc: "The most popular MOBA game.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/570/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/570/Dota_2/" },
+    { id: 440, title: "Team Fortress 2", desc: "Class-based team shooter with 9 unique classes.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/440/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/440/Team_Fortress_2/" },
+    { id: 1172470, title: "Apex Legends", desc: "Battle royale shooter with unique legends.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1172470/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/1172470/Apex_Legends/" },
+    { id: 1085660, title: "Destiny 2", desc: "First-person action MMO.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1085660/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/1085660/Destiny_2/" },
+    { id: 444090, title: "Paladins", desc: "Fantasy team-based shooter.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/444090/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/444090/Paladins/" },
+    { id: 230410, title: "Warframe", desc: "Co-op space ninja game.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/230410/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/230410/Warframe/" },
+    { id: 2169380, title: "The Finals", desc: "High-stakes competitive shooter.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/2169380/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/2169380/THE_FINALS/" },
+    { id: 1477560, title: "Rocket League", desc: "High-powered hybrid of arcade soccer and driving.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1477560/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/1477560/Rocket_League/" },
+    { id: 1238840, title: "PUBG: BATTLEGROUNDS", desc: "Battle royale where 100 players fight.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1238840/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/1238840/PUBG_BATTLEGROUNDS/" }
 ];
 
 // Load sent games from database
 async function loadSentGames() {
     return new Promise((resolve) => {
         db.all(`SELECT game_id FROM free_games_sent`, [], (err, rows) => {
-            if (rows) {
-                rows.forEach(row => sentGamesCache.add(String(row.game_id)));
-                console.log(`📚 Loaded ${sentGamesCache.size} previously sent free games`);
-            }
+            if (rows) rows.forEach(row => sentGamesCache.add(String(row.game_id)));
+            console.log(`📚 Loaded ${sentGamesCache.size} previously sent free games`);
             resolve();
         });
     });
 }
 
-// Mark a game as sent
 async function markGameAsSent(gameId, title) {
     return new Promise((resolve) => {
         db.run(`INSERT OR IGNORE INTO free_games_sent (game_id, title, sent_at) VALUES (?, ?, ?)`,
@@ -87,26 +84,16 @@ async function markGameAsSent(gameId, title) {
     });
 }
 
-// Get a random free game that hasn't been sent yet
 async function getRandomFreeGame() {
     const availableGames = FREE_STEAM_GAMES.filter(g => !sentGamesCache.has(String(g.id)));
-    
-    let gameToSend;
     if (availableGames.length === 0) {
         sentGamesCache.clear();
-        await new Promise((resolve) => {
-            db.run(`DELETE FROM free_games_sent`, [], () => resolve());
-        });
-        gameToSend = FREE_STEAM_GAMES[Math.floor(Math.random() * FREE_STEAM_GAMES.length)];
-        console.log('🔄 Reset free games cache - starting fresh');
-    } else {
-        gameToSend = availableGames[Math.floor(Math.random() * availableGames.length)];
+        db.run(`DELETE FROM free_games_sent`, []);
+        return FREE_STEAM_GAMES[Math.floor(Math.random() * FREE_STEAM_GAMES.length)];
     }
-    
-    return gameToSend;
+    return availableGames[Math.floor(Math.random() * availableGames.length)];
 }
 
-// Send professional free game embed
 async function sendFreeGameEmbed(channel, game) {
     const embed = new EmbedBuilder()
         .setColor(0x00FF00)
@@ -117,16 +104,12 @@ async function sendFreeGameEmbed(channel, game) {
         .setImage(game.image)
         .addFields(
             { name: '💰 Price', value: `~~${game.price}~~ → **FREE!**`, inline: true },
-            { name: '🏷️ Discount', value: '100% FREE', inline: true },
-            { name: '🎮 Platform', value: 'Steam PC', inline: true },
             { name: '🔗 Download', value: `[Get Game for Free](${game.url})`, inline: false }
         )
-        .setFooter({ text: 'Free game every 3 minutes • Get them before they expire!', iconURL: channel.guild?.iconURL() })
+        .setFooter({ text: 'Free game every 3 minutes!' })
         .setTimestamp();
-    
     await channel.send({ embeds: [embed] });
     await markGameAsSent(game.id, game.title);
-    console.log(`🎮 Sent free game: ${game.title} - Remaining: ${FREE_STEAM_GAMES.length - sentGamesCache.size}`);
 }
 
 // ============================================
@@ -243,7 +226,7 @@ function getWarnCount(uid, gid) {
 }
 
 // ============================================
-// TICKET SYSTEM
+// TICKET SYSTEM (Simplified)
 // ============================================
 function saveTicketConfig(gid, panel, cat, log, role) { db.run(`INSERT OR REPLACE INTO ticket_config VALUES (?, ?, ?, ?, ?)`, [gid, panel, cat, log, role]); }
 function getTicketConfig(gid) { return new Promise((r) => { db.get(`SELECT * FROM ticket_config WHERE guild_id = ?`, [gid], (err, row) => r(row)); }); }
@@ -396,43 +379,6 @@ async function cmdInfo(message, targetUser) {
             { name: '📈 Level & XP', value: `**Level:** ${stats.level}\n**XP:** ${Math.floor(stats.xp)} / ${xpNeeded} (${xpProgress}%)\n**Rank:** #${rank} in server`, inline: true },
             { name: '📊 Activity Stats', value: `**Messages:** ${stats.messages.toLocaleString()}\n**Voice Time:** ${formatVoiceTime(stats.voice_minutes)}\n**Warnings:** ${warnCount}`, inline: true }
         ).setTimestamp();
-    await message.reply({ embeds: [embed] });
-}
-
-async function cmdRank(message, targetUser) {
-    const stats = await getUserStats(targetUser.id);
-    const allStats = await getAllStats();
-    const rank = allStats.findIndex(s => s.user_id === targetUser.id) + 1 || allStats.length + 1;
-    const xpNeeded = stats.level * 100;
-    const xpProgress = Math.floor((stats.xp / xpNeeded) * 100);
-    const barLength = 20;
-    const filled = Math.floor((xpProgress / 100) * barLength);
-    const bar = '█'.repeat(filled) + '░'.repeat(barLength - filled);
-    const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(`🏆 ${targetUser.tag} - Rank #${rank}`)
-        .setDescription(`**Level ${stats.level}**\n\`${bar}\` ${xpProgress}%`)
-        .addFields({ name: '📊 XP Progress', value: `${Math.floor(stats.xp)} / ${xpNeeded} XP`, inline: true })
-        .setTimestamp();
-    await message.reply({ embeds: [embed] });
-}
-
-async function cmdTop(message, type = 'xp') {
-    const allStats = await getAllStats();
-    const sorted = [...allStats].sort((a, b) => {
-        if (type === 'xp') return b.xp - a.xp;
-        if (type === 'messages') return b.messages - a.messages;
-        return b.voice_minutes - a.voice_minutes;
-    });
-    const top10 = sorted.slice(0, 10);
-    let description = '';
-    for (let i = 0; i < top10.length; i++) {
-        const user = await client.users.fetch(top10[i].user_id).catch(() => null);
-        const username = user ? user.username : 'Unknown';
-        if (type === 'xp') description += `${i+1}. **${username}** - Level ${top10[i].level} (${Math.floor(top10[i].xp)} XP)\n`;
-        else if (type === 'messages') description += `${i+1}. **${username}** - ${top10[i].messages.toLocaleString()} messages\n`;
-        else description += `${i+1}. **${username}** - ${formatVoiceTime(top10[i].voice_minutes)}\n`;
-    }
-    const titles = { xp: 'XP Leaderboard', messages: 'Messages Leaderboard', voice: 'Voice Time Leaderboard' };
-    const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(`🏆 ${titles[type] || 'Leaderboard'}`).setDescription(description || 'No data available').setTimestamp();
     await message.reply({ embeds: [embed] });
 }
 
@@ -610,10 +556,10 @@ client.on('messageCreate', async (message) => {
         const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('🛡️ Bot Commands')
             .setDescription('**Moderation:** `!ban`, `!kick`, `!mute`, `!unmute`, `!warn`, `!clear`, `!lock`, `!unlock`, `!giverole`, `!removerole`, `!unban`')
             .addFields(
-                { name: '🎮 Free Games', value: '`!freegame` - Start auto free games (every 3 min)\n`!stopfreegame` - Stop auto free games', inline: false },
-                { name: '📊 Stats Commands', value: '`!info [user]` - Full user stats\n`!rank [user]` - Rank & XP\n`!top` - Leaderboard\n`!messages [user]` - Message count\n`!voice [user]` - Voice time', inline: false },
-                { name: 'ℹ️ Server Info', value: '`!infoserver` - View detailed server statistics', inline: false },
-                { name: '📢 Announcements', value: '`!ann <msg>`, `!anni`', inline: false },
+                { name: '🎮 Free Games', value: '`!freegame` - Start auto free games\n`!stopfreegame` - Stop', inline: false },
+                { name: '📊 Stats', value: '`!info`, `!rank`, `!top`, `!messages`, `!voice`', inline: false },
+                { name: '🏰 Server Info', value: '`!infoserver` - Server statistics', inline: false },
+                { name: '📢 Announcements', value: '`!ann`, `!anni`', inline: false },
                 { name: '🎫 Ticket', value: '`!ticketsetup`, `!ticket`', inline: false },
                 { name: '🎭 Reaction Roles', value: '`!roltest`', inline: false },
                 { name: '✅ Verification', value: '`!verif`, `!sendpanel`, `!verifstatus`, `!resetverif`', inline: false },
@@ -622,73 +568,34 @@ client.on('messageCreate', async (message) => {
         return message.reply({ embeds: [embed] });
     }
 
-    // ========== PROFESSIONAL SERVER INFO COMMAND ==========
+    // ========== CLEAN PROFESSIONAL SERVER INFO COMMAND ==========
     if (cmd === 'infoserver') {
         const guild = message.guild;
         
-        // Get member stats
         const totalMembers = guild.memberCount;
         const onlineMembers = guild.members.cache.filter(m => m.presence?.status === 'online' || m.presence?.status === 'idle' || m.presence?.status === 'dnd').size;
-        const botCount = guild.members.cache.filter(m => m.user.bot).size;
-        const humanCount = totalMembers - botCount;
-        
-        // Voice stats
         const voiceMembers = guild.members.cache.filter(m => m.voice.channel).size;
+        const textChannels = guild.channels.cache.filter(c => c.type === ChannelType.GuildText).size;
         const voiceChannels = guild.channels.cache.filter(c => c.type === ChannelType.GuildVoice).size;
-        
-        // Boost stats
         const boostCount = guild.premiumSubscriptionCount || 0;
         const boostLevel = guild.premiumTier;
-        const boostEmoji = boostLevel === 0 ? '⭐' : boostLevel === 1 ? '🥉' : boostLevel === 2 ? '🥈' : '🥇';
+        const createdDate = `<t:${Math.floor(guild.createdTimestamp / 1000)}:D>`;
         
-        // Channel stats
-        const textChannels = guild.channels.cache.filter(c => c.type === ChannelType.GuildText).size;
-        const voiceChannelsCount = guild.channels.cache.filter(c => c.type === ChannelType.GuildVoice).size;
-        const categoryCount = guild.channels.cache.filter(c => c.type === ChannelType.GuildCategory).size;
+        const boostEmoji = boostLevel === 0 ? '⭐' : boostLevel === 1 ? '🌟' : boostLevel === 2 ? '✨' : '💎';
         
-        // Role count
-        const roleCount = guild.roles.cache.size;
-        
-        // Emoji count
-        const emojiCount = guild.emojis.cache.size;
-        
-        // Creation date formatting
-        const createdDate = `<t:${Math.floor(guild.createdTimestamp / 1000)}:F>`;
-        const createdRelative = `<t:${Math.floor(guild.createdTimestamp / 1000)}:R>`;
-        
-        // Server verification level
-        const verificationLevels = {
-            0: 'None',
-            1: 'Low',
-            2: 'Medium',
-            3: 'High',
-            4: 'Highest'
-        };
-        const verificationLevel = verificationLevels[guild.verificationLevel] || 'Unknown';
-        
-        // Build the professional embed
         const embed = new EmbedBuilder()
             .setColor(0x5865F2)
             .setTitle(`🏰 ${guild.name}`)
             .setThumbnail(guild.iconURL({ size: 1024, dynamic: true }))
-            .setDescription(guild.description || `⚡ **Welcome to ${guild.name}!**\nA thriving community with amazing members.`)
-            .setImage(guild.bannerURL({ size: 1024 }) || null)
+            .setDescription(guild.description || null)
             .addFields(
-                { name: '━━━━━━━━━━━━━━━━━━━━━━━━━━━━', value: ' ', inline: false },
-                { name: '👥 MEMBERS', value: `\`\`\`yml\nTotal Members: ${totalMembers.toLocaleString()}\nHumans: ${humanCount.toLocaleString()}\nBots: ${botCount.toLocaleString()}\nOnline: ${onlineMembers}\`\`\``, inline: true },
-                { name: '🎤 VOICE', value: `\`\`\`yml\nIn Voice: ${voiceMembers}\nChannels: ${voiceChannels}\nAvailable: ${voiceChannels - voiceMembers}\`\`\``, inline: true },
-                { name: '━━━━━━━━━━━━━━━━━━━━━━━━━━━━', value: ' ', inline: false },
-                { name: `${boostEmoji} BOOST`, value: `\`\`\`yml\nLevel: ${boostLevel}\nBoosts: ${boostCount}\`\`\``, inline: true },
-                { name: '📊 CHANNELS', value: `\`\`\`yml\nText: ${textChannels}\nVoice: ${voiceChannelsCount}\nCategories: ${categoryCount}\`\`\``, inline: true },
-                { name: '━━━━━━━━━━━━━━━━━━━━━━━━━━━━', value: ' ', inline: false },
-                { name: '🎭 ROLES', value: `\`\`\`yml\nTotal Roles: ${roleCount}\`\`\``, inline: true },
-                { name: '😀 EMOJIS', value: `\`\`\`yml\nTotal Emojis: ${emojiCount}\`\`\``, inline: true },
-                { name: '━━━━━━━━━━━━━━━━━━━━━━━━━━━━', value: ' ', inline: false },
-                { name: '📅 CREATED', value: `\`\`\`yml\nDate: ${createdDate}\nRelative: ${createdRelative}\`\`\``, inline: false },
-                { name: '🔒 VERIFICATION', value: `\`\`\`yml\nLevel: ${verificationLevel}\`\`\``, inline: true },
-                { name: '👑 OWNER', value: `<@${guild.ownerId}>`, inline: true }
+                { name: '👥 Members', value: `**${totalMembers.toLocaleString()}** total\n🟢 **${onlineMembers}** online`, inline: true },
+                { name: '🎧 Voice', value: `**${voiceMembers}** in voice\n🎤 **${voiceChannels}** channels`, inline: true },
+                { name: '📊 Channels', value: `💬 **${textChannels}** text\n🔊 **${voiceChannels}** voice`, inline: true },
+                { name: `${boostEmoji} Boost`, value: `Level **${boostLevel}**\n**${boostCount}** boosts`, inline: true },
+                { name: '📅 Created', value: `${createdDate}`, inline: true }
             )
-            .setFooter({ text: `Server ID: ${guild.id} • Premium Server Info`, iconURL: client.user.displayAvatarURL() })
+            .setFooter({ text: `Server ID: ${guild.id}` })
             .setTimestamp();
         
         await message.reply({ embeds: [embed] });
@@ -710,7 +617,6 @@ client.on('messageCreate', async (message) => {
             try {
                 const game = await getRandomFreeGame();
                 await sendFreeGameEmbed(channel, game);
-                console.log(`🎮 Auto-sent free game: ${game.title}`);
             } catch (error) {
                 console.error('Auto free game error:', error);
             }
@@ -744,12 +650,39 @@ client.on('messageCreate', async (message) => {
     if (cmd === 'rank') {
         let target = member.user;
         if (args[0]) { try { target = await client.users.fetch(args[0]); } catch(e) { return message.reply('❌ User not found'); } }
-        await cmdRank(message, target);
+        const stats = await getUserStats(target.id);
+        const allStats = await getAllStats();
+        const rank = allStats.findIndex(s => s.user_id === target.id) + 1 || allStats.length + 1;
+        const xpNeeded = stats.level * 100;
+        const xpProgress = Math.floor((stats.xp / xpNeeded) * 100);
+        const bar = '█'.repeat(Math.floor((xpProgress / 100) * 20)) + '░'.repeat(20 - Math.floor((xpProgress / 100) * 20));
+        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(`🏆 ${target.tag} - Rank #${rank}`)
+            .setDescription(`**Level ${stats.level}**\n\`${bar}\` ${xpProgress}%`)
+            .addFields({ name: '📊 XP Progress', value: `${Math.floor(stats.xp)} / ${xpNeeded} XP`, inline: true })
+            .setTimestamp();
+        await message.reply({ embeds: [embed] });
         return;
     }
     if (cmd === 'top') {
         const type = args[0] === 'messages' ? 'messages' : (args[0] === 'voice' ? 'voice' : 'xp');
-        await cmdTop(message, type);
+        const allStats = await getAllStats();
+        const sorted = [...allStats].sort((a, b) => {
+            if (type === 'xp') return b.xp - a.xp;
+            if (type === 'messages') return b.messages - a.messages;
+            return b.voice_minutes - a.voice_minutes;
+        });
+        const top10 = sorted.slice(0, 10);
+        let description = '';
+        for (let i = 0; i < top10.length; i++) {
+            const user = await client.users.fetch(top10[i].user_id).catch(() => null);
+            const username = user ? user.username : 'Unknown';
+            if (type === 'xp') description += `${i+1}. **${username}** - Level ${top10[i].level} (${Math.floor(top10[i].xp)} XP)\n`;
+            else if (type === 'messages') description += `${i+1}. **${username}** - ${top10[i].messages.toLocaleString()} messages\n`;
+            else description += `${i+1}. **${username}** - ${formatVoiceTime(top10[i].voice_minutes)}\n`;
+        }
+        const titles = { xp: 'XP Leaderboard', messages: 'Messages Leaderboard', voice: 'Voice Time Leaderboard' };
+        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(`🏆 ${titles[type]}`).setDescription(description || 'No data available').setTimestamp();
+        await message.reply({ embeds: [embed] });
         return;
     }
     if (cmd === 'messages') {
@@ -885,11 +818,6 @@ client.on('messageCreate', async (message) => {
             .addFields({ name: 'ID', value: target.id, inline: true }, { name: 'Joined', value: `<t:${Math.floor(target.joinedTimestamp / 1000)}:R>`, inline: true }, { name: 'Warnings', value: `${warns}`, inline: true }).setTimestamp();
         await message.reply({ embeds: [embed] });
     }
-    else if (cmd === 'serverinfo') {
-        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(guild.name).setThumbnail(guild.iconURL())
-            .addFields({ name: 'Owner', value: `<@${guild.ownerId}>`, inline: true }, { name: 'Members', value: `${guild.memberCount}`, inline: true }, { name: 'Channels', value: `${guild.channels.cache.size}`, inline: true }).setTimestamp();
-        await message.reply({ embeds: [embed] });
-    }
     else if (cmd === 'avatar') {
         const id = args[0];
         const user = id ? await client.users.fetch(id).catch(() => null) : message.author;
@@ -950,10 +878,7 @@ client.once('ready', async () => {
     await loadSentGames();
     console.log(`✅ ${client.user.tag} is online!`);
     console.log(`📋 Prefix: !`);
-    console.log(`🎮 Free games system ready - ${FREE_STEAM_GAMES.length} games available, ${sentGamesCache.size} sent already`);
-    console.log(`📊 Stats commands: !info, !rank, !top, !messages, !voice`);
-    console.log(`🏰 Server info command: !infoserver`);
-    client.user.setActivity('!help | !infoserver', { type: 3 });
+    client.user.setActivity('!help | Premium Bot', { type: 3 });
 });
 
 // ============================================
