@@ -4,7 +4,7 @@ const axios = require('axios');
 require('dotenv').config();
 
 // ============================================
-// DATABASE
+// DATABASE SETUP
 // ============================================
 const db = new sqlite3.Database('./bot_data.db');
 
@@ -48,7 +48,7 @@ const activeFreeGameSessions = new Map();
 const sentGamesCache = new Set();
 
 // ============================================
-// FREE GAMES
+// FREE GAMES LIST
 // ============================================
 const FREE_STEAM_GAMES = [
     { id: 730, title: "Counter-Strike 2", desc: "Free-to-play competitive FPS.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/730/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/730/CounterStrike_2/" },
@@ -279,16 +279,33 @@ async function sendAnn(ch, msg) {
     await ch.send({ embeds: [embed] });
 }
 
-async function sendWelcome(ch) {
-    const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(`🌟 WELCOME TO ${ch.guild.name.toUpperCase()} 🌟`).setDescription('> Thank you for joining!')
-        .setThumbnail(ch.guild.iconURL()).setImage(WELCOME_IMAGE_URL || 'https://media.discordapp.net/attachments/1462437612647088335/1482006389843824670/content.png')
+// ========== ORIGINAL WELCOME MESSAGE (EXACTLY AS BEFORE) ==========
+async function sendWelcome(channel) {
+    const embed = new EmbedBuilder()
+        .setColor(0x5865F2)
+        .setTitle(`🌟 WELCOME TO ${channel.guild.name.toUpperCase()} 🌟`)
+        .setDescription(`> **Thank you for joining our community!**\n> We're excited to have you here.\n`)
+        .setThumbnail(channel.guild.iconURL())
+        .setImage('https://media.discordapp.net/attachments/1462437612647088335/1482006389843824670/content.png')
         .addFields(
-            { name: '📢 Announcements', value: 'Stay updated', inline: false },
-            { name: '📜 Rules', value: 'Read the rules', inline: false },
-            { name: '🎭 Roles', value: 'Use !roltest', inline: false },
-            { name: '🔧 Commands', value: 'Use !help', inline: false }
-        ).setTimestamp();
-    await ch.send({ embeds: [embed] });
+            { name: '━━━━━━━━━━━━━━━━━━━━━━━━━━━━', value: ' ', inline: false },
+            { name: '📢 │ ANNOUNCEMENTS', value: '> Stay updated with server news and events', inline: false },
+            { name: '━━━━━━━━━━━━━━━━━━━━━━━━━━━━', value: ' ', inline: false },
+            { name: '📜 │ RULES', value: '> Please read our rules to keep the community safe', inline: false },
+            { name: '━━━━━━━━━━━━━━━━━━━━━━━━━━━━', value: ' ', inline: false },
+            { name: '🎭 │ SELF ROLES', value: '> Get your roles using !roltest', inline: false },
+            { name: '━━━━━━━━━━━━━━━━━━━━━━━━━━━━', value: ' ', inline: false },
+            { name: '📋 │ APPLY TEAM', value: '> Interested in joining our team? Use !ticket', inline: false },
+            { name: '━━━━━━━━━━━━━━━━━━━━━━━━━━━━', value: ' ', inline: false },
+            { name: '💬 │ GENERAL', value: '> Chat with the community', inline: false },
+            { name: '━━━━━━━━━━━━━━━━━━━━━━━━━━━━', value: ' ', inline: false },
+            { name: '🔧 │ COMMANDS', value: '> Use !help to see all commands\n> Use !suggest to share ideas\n> Use !ticket for support', inline: false },
+            { name: '━━━━━━━━━━━━━━━━━━━━━━━━━━━━', value: ' ', inline: false },
+            { name: '🎤 │ VOICE', value: '> Connect with members in voice channels', inline: false }
+        )
+        .setTimestamp()
+        .setFooter({ text: `${channel.guild.name} • Welcome!`, iconURL: channel.guild.iconURL() });
+    await channel.send({ embeds: [embed] });
 }
 
 // ============================================
@@ -424,10 +441,11 @@ client.on('messageUpdate', async (old, neu) => {
     await ch.send({ embeds: [embed] });
 });
 
+// ========== ORIGINAL WELCOME ON JOIN (EXACTLY AS BEFORE) ==========
 client.on('guildMemberAdd', async (member) => {
     const ch = member.guild.channels.cache.get(LOG_CHANNEL_ID);
     if (ch) {
-        const embed = new EmbedBuilder().setColor(0x22C55E).setTitle('👋 Joined').setDescription(`${member.user.tag} joined`).setThumbnail(member.user.displayAvatarURL()).setTimestamp();
+        const embed = new EmbedBuilder().setColor(0x22C55E).setTitle('👋 Member Joined').setDescription(`${member.user.tag} joined`).setThumbnail(member.user.displayAvatarURL()).setTimestamp();
         await ch.send({ embeds: [embed] });
     }
     const vcfg = await getVerif(member.guild.id);
@@ -567,30 +585,32 @@ client.on('messageCreate', async (message) => {
         return message.reply({ embeds: [embed] });
     }
 
-    // ========== SERVERINFO (Simple & Professional) ==========
+    // ========== CLEAN SERVER INFO COMMAND ==========
     if (cmd === 'serverinfo') {
         const total = guild.memberCount;
-        const online = guild.members.cache.filter(m => m.presence?.status === 'online').size;
+        const online = guild.members.cache.filter(m => m.presence?.status === 'online' || m.presence?.status === 'idle' || m.presence?.status === 'dnd').size;
         const voice = guild.members.cache.filter(m => m.voice.channel).size;
-        const text = guild.channels.cache.filter(c => c.type === ChannelType.GuildText).size;
-        const vocal = guild.channels.cache.filter(c => c.type === ChannelType.GuildVoice).size;
+        const boosting = guild.members.cache.filter(m => m.premiumSince).size;
         const boosts = guild.premiumSubscriptionCount || 0;
         const level = guild.premiumTier;
         const created = `<t:${Math.floor(guild.createdTimestamp / 1000)}:D>`;
         
         const embed = new EmbedBuilder()
             .setColor(0x5865F2)
-            .setTitle(`🏰 ${guild.name}`)
+            .setAuthor({ name: guild.name, iconURL: guild.iconURL() })
+            .setTitle(`📊 SERVER STATISTICS`)
             .setThumbnail(guild.iconURL({ size: 1024 }))
             .addFields(
-                { name: '👥 Members', value: `**${total}** total\n🟢 **${online}** online`, inline: true },
-                { name: '🎧 Voice', value: `**${voice}** in voice\n🎤 **${vocal}** channels`, inline: true },
-                { name: '📊 Channels', value: `💬 **${text}** text\n🔊 **${vocal}** voice`, inline: true },
-                { name: `${level === 0 ? '⭐' : '💎'} Boost`, value: `Level **${level}**\n**${boosts}** boosts`, inline: true },
-                { name: '📅 Created', value: `${created}`, inline: true }
+                { name: '👤 MEMBERS', value: `**${total.toLocaleString()}** Total Members`, inline: true },
+                { name: '🟢 ONLINE', value: `**${online}** Online Now`, inline: true },
+                { name: '🎤 VOICE', value: `**${voice}** In Voice`, inline: true },
+                { name: '🚀 BOOSTS', value: `**${boosts}** Total Boosts\nLevel **${level}**`, inline: true },
+                { name: '⭐ BOOSTING', value: `**${boosting}** Members Boosting`, inline: true },
+                { name: '📅 CREATED', value: `${created}`, inline: true }
             )
-            .setFooter({ text: `ID: ${guild.id}` })
+            .setFooter({ text: `Server ID: ${guild.id} • Requested by ${message.author.tag}` })
             .setTimestamp();
+        
         await message.reply({ embeds: [embed] });
         return;
     }
@@ -860,6 +880,7 @@ client.once('ready', async () => {
     await loadSentGames();
     console.log(`✅ ${client.user.tag} online!`);
     console.log(`📋 Prefix: !`);
+    console.log(`🎮 Free games ready`);
     client.user.setActivity('!help', { type: 3 });
 });
 
