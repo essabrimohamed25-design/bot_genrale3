@@ -1,6 +1,5 @@
 const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const sqlite3 = require('sqlite3').verbose();
-const { createCanvas, loadImage } = require('canvas');
 require('dotenv').config();
 
 // ============================================
@@ -23,8 +22,7 @@ db.serialize(() => {
 // ============================================
 // CONFIGURATION
 // ============================================
-const { BOT_TOKEN, LOG_CHANNEL_ID, MOD_ROLE_ID, AUTO_ROLE_ID, WELCOME_IMAGE_URL, PROFILE_BG_URL } = process.env;
-const PROFILE_BG = PROFILE_BG_URL || "https://media.discordapp.net/attachments/1480969775344652470/1496647110525845625/DF7E4FDA-66D3-49FF-BD5E-7C746253AE2D.png";
+const { BOT_TOKEN, LOG_CHANNEL_ID, MOD_ROLE_ID, AUTO_ROLE_ID, WELCOME_IMAGE_URL } = process.env;
 
 if (!BOT_TOKEN) {
     console.error('❌ Missing BOT_TOKEN');
@@ -80,140 +78,12 @@ function updateStats(userId, messages = 0, voice = 0) {
     });
 }
 
-// ============================================
-// PROFILE CARD GENERATOR (Canvas)
-// ============================================
-async function generateProfileCard(user, stats) {
-    const width = 1000;
-    const height = 450;
-    const canvas = createCanvas(width, height);
-    const ctx = canvas.getContext('2d');
-
-    try {
-        const bg = await loadImage(PROFILE_BG);
-        ctx.drawImage(bg, 0, 0, width, height);
-    } catch(e) {
-        const grad = ctx.createLinearGradient(0, 0, width, height);
-        grad.addColorStop(0, '#0f0c29');
-        grad.addColorStop(0.5, '#302b63');
-        grad.addColorStop(1, '#24243e');
-        ctx.fillStyle = grad;
-        ctx.fillRect(0, 0, width, height);
-    }
-
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
-    ctx.fillRect(0, 0, width, height);
-
-    ctx.strokeStyle = '#5865F2';
-    ctx.lineWidth = 4;
-    ctx.strokeRect(15, 15, width - 30, height - 30);
-
-    try {
-        const avatar = await loadImage(user.displayAvatarURL({ extension: 'png', size: 256 }));
-        const avatarX = 60, avatarY = 60, avatarSize = 140;
-        ctx.save();
-        ctx.beginPath();
-        ctx.arc(avatarX + avatarSize/2, avatarY + avatarSize/2, avatarSize/2, 0, Math.PI * 2);
-        ctx.clip();
-        ctx.drawImage(avatar, avatarX, avatarY, avatarSize, avatarSize);
-        ctx.restore();
-        ctx.beginPath();
-        ctx.arc(avatarX + avatarSize/2, avatarY + avatarSize/2, avatarSize/2 + 4, 0, Math.PI * 2);
-        ctx.strokeStyle = '#5865F2';
-        ctx.lineWidth = 5;
-        ctx.stroke();
-    } catch(e) {}
-
-    ctx.fillStyle = '#FFFFFF';
-    ctx.font = 'bold 38px "Segoe UI", "Arial"';
-    ctx.shadowColor = 'rgba(0,0,0,0.5)';
-    ctx.shadowBlur = 5;
-    ctx.fillText(user.username, 240, 110);
-    ctx.font = '22px "Segoe UI", "Arial"';
-    ctx.fillStyle = '#B9BBBE';
-    ctx.fillText(`#${user.discriminator}`, 240, 150);
-    ctx.shadowBlur = 0;
-
-    const levelX = 240, levelY = 190;
-    ctx.fillStyle = 'rgba(88, 101, 242, 0.2)';
-    ctx.fillRect(levelX, levelY, 160, 70);
-    ctx.fillStyle = '#5865F2';
-    ctx.font = 'bold 36px "Segoe UI", "Arial"';
-    ctx.fillText(`${stats.level}`, levelX + 20, levelY + 48);
-    ctx.fillStyle = '#B9BBBE';
-    ctx.font = '14px "Segoe UI", "Arial"';
-    ctx.fillText('LEVEL', levelX + 20, levelY + 68);
-
-    const rankX = levelX + 180;
-    ctx.fillStyle = 'rgba(88, 101, 242, 0.2)';
-    ctx.fillRect(rankX, levelY, 160, 70);
-    const rank = Math.floor(stats.xp / 100) + 1;
-    ctx.fillStyle = '#FEE75C';
-    ctx.font = 'bold 36px "Segoe UI", "Arial"';
-    ctx.fillText(`${rank}`, rankX + 20, levelY + 48);
-    ctx.fillStyle = '#B9BBBE';
-    ctx.font = '14px "Segoe UI", "Arial"';
-    ctx.fillText('RANK', rankX + 20, levelY + 68);
-
-    const statY = 290, statW = 220;
-    ctx.fillStyle = 'rgba(87, 242, 135, 0.15)';
-    ctx.fillRect(levelX, statY, statW, 80);
-    ctx.fillStyle = '#57F287';
-    ctx.font = 'bold 32px "Segoe UI", "Arial"';
-    ctx.fillText(`${stats.messages.toLocaleString()}`, levelX + 15, statY + 45);
-    ctx.fillStyle = '#B9BBBE';
-    ctx.font = '13px "Segoe UI", "Arial"';
-    ctx.fillText('MESSAGES SENT', levelX + 15, statY + 70);
-
-    const voiceX = levelX + statW + 20;
-    ctx.fillStyle = 'rgba(235, 69, 158, 0.15)';
-    ctx.fillRect(voiceX, statY, statW, 80);
-    const hours = Math.floor(stats.voice_minutes / 60);
-    const mins = stats.voice_minutes % 60;
-    const voiceText = hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
-    ctx.fillStyle = '#EB459E';
-    ctx.font = 'bold 32px "Segoe UI", "Arial"';
-    ctx.fillText(voiceText, voiceX + 15, statY + 45);
-    ctx.fillStyle = '#B9BBBE';
-    ctx.font = '13px "Segoe UI", "Arial"';
-    ctx.fillText('VOICE TIME', voiceX + 15, statY + 70);
-
-    const xpX = voiceX + statW + 20;
-    ctx.fillStyle = 'rgba(88, 101, 242, 0.15)';
-    ctx.fillRect(xpX, statY, statW, 80);
-    ctx.fillStyle = '#FEE75C';
-    ctx.font = 'bold 32px "Segoe UI", "Arial"';
-    ctx.fillText(`${Math.floor(stats.xp)}`, xpX + 15, statY + 45);
-    ctx.fillStyle = '#B9BBBE';
-    ctx.font = '13px "Segoe UI", "Arial"';
-    ctx.fillText('TOTAL XP', xpX + 15, statY + 70);
-
-    const xpNeeded = stats.level * 100;
-    const percent = Math.min(100, (stats.xp / xpNeeded) * 100);
-    const barX = 240, barY = 395, barWidth = 580, barHeight = 24;
-    ctx.fillStyle = '#2C2F33';
-    ctx.fillRect(barX, barY, barWidth, barHeight);
-    const fillGrad = ctx.createLinearGradient(barX, barY, barX + barWidth, barY);
-    fillGrad.addColorStop(0, '#5865F2');
-    fillGrad.addColorStop(1, '#4752C4');
-    ctx.fillStyle = fillGrad;
-    ctx.fillRect(barX, barY, (percent / 100) * barWidth, barHeight);
-    ctx.fillStyle = '#FFFFFF';
-    ctx.font = 'bold 14px "Segoe UI", "Arial"';
-    ctx.shadowBlur = 2;
-    ctx.fillText(`${Math.floor(stats.xp)} / ${xpNeeded} XP`, barX + barWidth/2 - 70, barY + 17);
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = '#B9BBBE';
-    ctx.font = 'bold 13px "Segoe UI", "Arial"';
-    ctx.fillText(`${Math.floor(percent)}%`, barX + barWidth - 50, barY + 17);
-
-    ctx.fillStyle = 'rgba(79, 84, 92, 0.8)';
-    ctx.font = '12px "Segoe UI", "Arial"';
-    ctx.fillText('Premium Discord Bot', width - 150, height - 18);
-    ctx.fillStyle = '#5865F2';
-    ctx.fillText('✦', width - 155, height - 17);
-
-    return canvas.toBuffer();
+function getAllStats(guildId) {
+    return new Promise((resolve) => {
+        db.all(`SELECT user_id, messages, voice_minutes, xp, level FROM user_stats ORDER BY xp DESC`, (err, rows) => {
+            resolve(rows || []);
+        });
+    });
 }
 
 // ============================================
@@ -259,6 +129,13 @@ function fmtTime(ms) {
     if (h > 0) return `${h} hour(s)`;
     if (m > 0) return `${m} minute(s)`;
     return `${Math.floor(ms / 1000)} second(s)`;
+}
+
+function formatVoiceTime(minutes) {
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    if (hours > 0) return `${hours}h ${mins}m`;
+    return `${mins}m`;
 }
 
 function addWarning(uid, gid, reason, mod) {
@@ -500,18 +377,6 @@ client.on('guildMemberRemove', async (member) => {
     await ch.send({ embeds: [embed] }).catch(() => {});
 });
 
-client.on('voiceStateUpdate', async (old, neu) => {
-    if (old.channelId === neu.channelId) return;
-    const member = old.member || neu.member;
-    if (!member) return;
-    const ch = member.guild.channels.cache.get(LOG_CHANNEL_ID);
-    if (!ch) return;
-    let action = !old.channelId && neu.channelId ? 'Joined Voice' : (old.channelId && !neu.channelId ? 'Left Voice' : 'Moved Voice');
-    const embed = new EmbedBuilder().setColor(0x8B5CF6).setTitle(`🎤 ${action}`).setDescription(member.user.tag)
-        .addFields({ name: 'From', value: old.channel?.name || 'None', inline: true }, { name: 'To', value: neu.channel?.name || 'None', inline: true }).setTimestamp();
-    await ch.send({ embeds: [embed] }).catch(() => {});
-});
-
 // Anti-spam/link
 client.on('messageCreate', async (msg) => {
     if (msg.author.bot || !msg.guild || isMod(msg.member)) return;
@@ -610,6 +475,137 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 // ============================================
+// STATS COMMANDS (New)
+// ============================================
+
+// !info - Full user stats embed (Carl-bot style)
+async function cmdInfo(message, targetUser) {
+    const stats = await getUserStats(targetUser.id);
+    const member = await getMember(message.guild, targetUser.id);
+    if (!member) return message.reply('❌ User not found');
+
+    const warnCount = await getWarnCount(targetUser.id, message.guild.id);
+    const voiceTime = stats.voice_minutes;
+    const xpNeeded = stats.level * 100;
+    const xpProgress = Math.floor((stats.xp / xpNeeded) * 100);
+    
+    // Get rank in server
+    const allStats = await getAllStats(message.guild.id);
+    const sorted = allStats.sort((a, b) => b.xp - a.xp);
+    const rank = sorted.findIndex(s => s.user_id === targetUser.id) + 1;
+
+    const embed = new EmbedBuilder()
+        .setColor(0x5865F2)
+        .setTitle(`📊 ${targetUser.tag}`)
+        .setThumbnail(targetUser.displayAvatarURL({ size: 256 }))
+        .addFields(
+            { name: '👤 User Info', value: `**ID:** ${targetUser.id}\n**Created:** <t:${Math.floor(targetUser.createdTimestamp / 1000)}:R>`, inline: true },
+            { name: '📅 Server Info', value: `**Joined:** <t:${Math.floor(member.joinedTimestamp / 1000)}:R>\n**Roles:** ${member.roles.cache.size}`, inline: true },
+            { name: '━━━━━━━━━━━━━━━━━━', value: ' ', inline: false },
+            { name: '📈 Level & XP', value: `**Level:** ${stats.level}\n**XP:** ${Math.floor(stats.xp)} / ${xpNeeded} (${xpProgress}%)\n**Rank:** #${rank} in server`, inline: true },
+            { name: '📊 Activity Stats', value: `**Messages:** ${stats.messages.toLocaleString()}\n**Voice Time:** ${formatVoiceTime(voiceTime)}\n**Warnings:** ${warnCount}`, inline: true },
+            { name: '━━━━━━━━━━━━━━━━━━', value: ' ', inline: false }
+        )
+        .setFooter({ text: 'Use !rank, !top, !messages, !voice for more details' })
+        .setTimestamp();
+
+    await message.reply({ embeds: [embed] });
+}
+
+// !rank - Shows rank and XP progress
+async function cmdRank(message, targetUser) {
+    const stats = await getUserStats(targetUser.id);
+    const allStats = await getAllStats(message.guild.id);
+    const sorted = allStats.sort((a, b) => b.xp - a.xp);
+    const rank = sorted.findIndex(s => s.user_id === targetUser.id) + 1;
+    const total = sorted.length;
+    
+    const xpNeeded = stats.level * 100;
+    const xpProgress = Math.floor((stats.xp / xpNeeded) * 100);
+    const barLength = 20;
+    const filled = Math.floor((xpProgress / 100) * barLength);
+    const bar = '█'.repeat(filled) + '░'.repeat(barLength - filled);
+
+    const embed = new EmbedBuilder()
+        .setColor(0x5865F2)
+        .setTitle(`🏆 ${targetUser.tag} - Rank #${rank}`)
+        .setDescription(`**Level ${stats.level}** (Top ${Math.floor((rank / total) * 100)}%)\n\`${bar}\` ${xpProgress}%`)
+        .addFields(
+            { name: '📊 XP Progress', value: `${Math.floor(stats.xp)} / ${xpNeeded} XP`, inline: true },
+            { name: '🎯 Next Level', value: `${xpNeeded - Math.floor(stats.xp)} XP needed`, inline: true }
+        )
+        .setTimestamp();
+
+    await message.reply({ embeds: [embed] });
+}
+
+// !top - Leaderboard
+async function cmdTop(message, type = 'xp') {
+    const allStats = await getAllStats(message.guild.id);
+    const sorted = allStats.sort((a, b) => {
+        if (type === 'xp') return b.xp - a.xp;
+        if (type === 'messages') return b.messages - a.messages;
+        if (type === 'voice') return b.voice_minutes - a.voice_minutes;
+        return b.xp - a.xp;
+    });
+    
+    const top10 = sorted.slice(0, 10);
+    let description = '';
+    
+    for (let i = 0; i < top10.length; i++) {
+        const user = await client.users.fetch(top10[i].user_id).catch(() => null);
+        const username = user ? user.username : 'Unknown User';
+        if (type === 'xp') description += `${i+1}. **${username}** - Level ${top10[i].level} (${Math.floor(top10[i].xp)} XP)\n`;
+        else if (type === 'messages') description += `${i+1}. **${username}** - ${top10[i].messages.toLocaleString()} messages\n`;
+        else if (type === 'voice') description += `${i+1}. **${username}** - ${formatVoiceTime(top10[i].voice_minutes)}\n`;
+    }
+
+    const titles = { xp: 'XP Leaderboard', messages: 'Messages Leaderboard', voice: 'Voice Time Leaderboard' };
+    const colors = { xp: '#FEE75C', messages: '#57F287', voice: '#EB459E' };
+
+    const embed = new EmbedBuilder()
+        .setColor(colors[type])
+        .setTitle(`🏆 ${titles[type]}`)
+        .setDescription(description || 'No data available')
+        .setTimestamp();
+
+    await message.reply({ embeds: [embed] });
+}
+
+// !messages - Show message count
+async function cmdMessages(message, targetUser) {
+    const stats = await getUserStats(targetUser.id);
+    const embed = new EmbedBuilder()
+        .setColor(0x57F287)
+        .setTitle(`💬 ${targetUser.tag}'s Messages`)
+        .setDescription(`**Total Messages:** ${stats.messages.toLocaleString()}`)
+        .addFields(
+            { name: '📊 Average', value: `${Math.floor(stats.messages / Math.max(1, Math.floor((Date.now() - targetUser.createdTimestamp) / 86400000)))} per day`, inline: true },
+            { name: '🏆 Rank', value: `#${(await getAllStats(message.guild.id)).sort((a,b) => b.messages - a.messages).findIndex(s => s.user_id === targetUser.id) + 1} in server`, inline: true }
+        )
+        .setTimestamp();
+    await message.reply({ embeds: [embed] });
+}
+
+// !voice - Show voice time
+async function cmdVoice(message, targetUser) {
+    const stats = await getUserStats(targetUser.id);
+    const hours = Math.floor(stats.voice_minutes / 60);
+    const minutes = stats.voice_minutes % 60;
+    const embed = new EmbedBuilder()
+        .setColor(0xEB459E)
+        .setTitle(`🎤 ${targetUser.tag}'s Voice Time`)
+        .setDescription(`**Total Time:** ${hours}h ${minutes}m`)
+        .addFields(
+            { name: '🎙️ Hours', value: `${hours} hours`, inline: true },
+            { name: '⏱️ Minutes', value: `${minutes} minutes`, inline: true },
+            { name: '🏆 Rank', value: `#${(await getAllStats(message.guild.id)).sort((a,b) => b.voice_minutes - a.voice_minutes).findIndex(s => s.user_id === targetUser.id) + 1} in server`, inline: true }
+        )
+        .setTimestamp();
+    await message.reply({ embeds: [embed] });
+}
+
+// ============================================
 // COMMANDS
 // ============================================
 client.on('messageCreate', async (message) => {
@@ -626,26 +622,53 @@ client.on('messageCreate', async (message) => {
         const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('🛡️ Bot Commands')
             .setDescription('**Moderation:** `!ban`, `!kick`, `!mute`, `!unmute`, `!warn`, `!clear`, `!lock`, `!unlock`, `!giverole`, `!removerole`, `!unban`')
             .addFields(
-                { name: 'Info', value: '`!userinfo`, `!serverinfo`, `!avatar`, `!info`', inline: false },
-                { name: 'Announcements', value: '`!ann <msg>`, `!anni`', inline: false },
-                { name: 'Ticket', value: '`!ticketsetup`, `!ticket`', inline: false },
-                { name: 'Reaction Roles', value: '`!roltest`', inline: false },
-                { name: 'Verification', value: '`!verif`, `!sendpanel`, `!verifstatus`, `!resetverif`', inline: false },
-                { name: 'Other', value: '`!suggest`, `!giveaway`, `!info`', inline: false }
+                { name: '📊 Stats Commands', value: '`!info [user]` - Full user stats\n`!rank [user]` - Rank & XP progress\n`!top` - Server leaderboard\n`!messages [user]` - Message count\n`!voice [user]` - Voice time', inline: false },
+                { name: 'ℹ️ Info', value: '`!userinfo`, `!serverinfo`, `!avatar`', inline: false },
+                { name: '📢 Announcements', value: '`!ann <msg>`, `!anni`', inline: false },
+                { name: '🎫 Ticket', value: '`!ticketsetup`, `!ticket`', inline: false },
+                { name: '🎭 Reaction Roles', value: '`!roltest`', inline: false },
+                { name: '✅ Verification', value: '`!verif`, `!sendpanel`, `!verifstatus`, `!resetverif`', inline: false },
+                { name: '💡 Other', value: '`!suggest`, `!giveaway`', inline: false }
             ).setTimestamp();
         return message.reply({ embeds: [embed] });
     }
 
-    // !INFO
+    // ========== NEW STATS COMMANDS ==========
     if (cmd === 'info') {
         let target = member.user;
         if (args[0]) { try { target = await client.users.fetch(args[0]); } catch(e) { return message.reply('❌ User not found'); } }
-        const stats = await getUserStats(target.id);
-        const img = await generateProfileCard(target, stats);
-        await message.reply({ files: [{ attachment: img, name: 'profile.png' }] });
+        await cmdInfo(message, target);
+        return;
+    }
+    
+    if (cmd === 'rank') {
+        let target = member.user;
+        if (args[0]) { try { target = await client.users.fetch(args[0]); } catch(e) { return message.reply('❌ User not found'); } }
+        await cmdRank(message, target);
+        return;
+    }
+    
+    if (cmd === 'top') {
+        const type = args[0] === 'messages' ? 'messages' : (args[0] === 'voice' ? 'voice' : 'xp');
+        await cmdTop(message, type);
+        return;
+    }
+    
+    if (cmd === 'messages') {
+        let target = member.user;
+        if (args[0]) { try { target = await client.users.fetch(args[0]); } catch(e) { return message.reply('❌ User not found'); } }
+        await cmdMessages(message, target);
+        return;
+    }
+    
+    if (cmd === 'voice') {
+        let target = member.user;
+        if (args[0]) { try { target = await client.users.fetch(args[0]); } catch(e) { return message.reply('❌ User not found'); } }
+        await cmdVoice(message, target);
         return;
     }
 
+    // ========== OLD EXISTING COMMANDS ==========
     // VERIFICATION
     if (cmd === 'verif') { await setupVerif(message); }
     else if (cmd === 'resetverif') { db.run(`DELETE FROM verification_config WHERE guild_id = ?`, [guild.id]); message.reply('✅ Reset'); }
@@ -824,6 +847,7 @@ client.on('messageCreate', async (message) => {
 client.once('ready', () => {
     console.log(`✅ ${client.user.tag} is online!`);
     console.log(`📋 Prefix: !`);
+    console.log(`📊 Stats commands: !info, !rank, !top, !messages, !voice`);
     console.log(`🛡️ Moderation Bot Ready`);
     client.user.setActivity('!help', { type: 3 });
 });
