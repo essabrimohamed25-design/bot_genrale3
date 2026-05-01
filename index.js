@@ -1,5 +1,6 @@
 const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const sqlite3 = require('sqlite3').verbose();
+const axios = require('axios');
 require('dotenv').config();
 
 // ============================================
@@ -16,6 +17,7 @@ db.serialize(() => {
     db.run(`CREATE TABLE IF NOT EXISTS reaction_roles (guild_id TEXT, message_id TEXT, channel_id TEXT, emoji TEXT, role_id TEXT)`);
     db.run(`CREATE TABLE IF NOT EXISTS verification_config (guild_id TEXT PRIMARY KEY, auto_role TEXT, verified_role TEXT, channel TEXT, image_url TEXT, setup_by TEXT, setup_at TEXT)`);
     db.run(`CREATE TABLE IF NOT EXISTS user_stats (user_id TEXT PRIMARY KEY, messages INTEGER DEFAULT 0, voice_minutes INTEGER DEFAULT 0, xp INTEGER DEFAULT 0, level INTEGER DEFAULT 1)`);
+    db.run(`CREATE TABLE IF NOT EXISTS free_games_cache (id INTEGER PRIMARY KEY AUTOINCREMENT, game_data TEXT, fetched_at TEXT)`);
     console.log('✅ Database initialized');
 });
 
@@ -45,10 +47,117 @@ const client = new Client({
 });
 
 // ============================================
-// STORAGE - PERSISTENT VOICE TRACKING
+// STORAGE
 // ============================================
 const spamMap = new Map();
-const voiceStartTimes = new Map(); // userId -> { startTime, channelId }
+const voiceStartTimes = new Map();
+let cachedFreeGames = null;
+let lastFetchTime = 0;
+const CACHE_DURATION = 3600000; // 1 hour
+
+// ============================================
+// FREE GAMES SYSTEM
+// ============================================
+async function fetchFreeSteamGames() {
+    try {
+        const response = await axios.get('https://api.steampowered.com/ISteamApps/GetAppList/v2/', { timeout: 10000 });
+        if (!response.data?.applist) throw new Error('Invalid API response');
+        
+        const allGames = response.data.applist.apps;
+        const knownFreeGames = [730, 570, 440, 1172470, 1085660, 444090, 230410, 2169380];
+        const randomIds = [];
+        
+        for (let i = 0; i < 50; i++) {
+            randomIds.push(allGames[Math.floor(Math.random() * allGames.length)].appid);
+        }
+        
+        const idsToCheck = [...new Set([...knownFreeGames, ...randomIds])];
+        const freeGames = [];
+        
+        for (const appId of idsToCheck.slice(0, 30)) {
+            try {
+                const gameResponse = await axios.get(`https://store.steampowered.com/api/appdetails?appids=${appId}`, { timeout: 5000 });
+                const gameData = gameResponse.data[appId];
+                
+                if (gameData?.success) {
+                    const game = gameData.data;
+                    const isFree = game.is_free === true || (game.price_overview?.final === 0);
+                    
+                    if (isFree && game.type === 'game') {
+                        freeGames.push({
+                            id: appId,
+                            title: game.name,
+                            description: game.short_description || 'Get this game for free on Steam!',
+                            imageUrl: game.header_image || game.capsule_image,
+                            originalPrice: game.price_overview ? `$${(game.price_overview.initial / 100).toFixed(2)}` : 'Free',
+                            discount: '100% FREE',
+                            developers: game.developers?.join(', ') || 'Various',
+                            releaseDate: game.release_date?.date || 'Available Now',
+                            steamUrl: `https://store.steampowered.com/app/${appId}/`
+                        });
+                    }
+                }
+            } catch (err) { continue; }
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        return freeGames;
+    } catch (error) {
+        console.error('Error fetching free games:', error.message);
+        return [];
+    }
+}
+
+async function getRandomFreeGame() {
+    const now = Date.now();
+    
+    if (cachedFreeGames?.length > 0 && (now - lastFetchTime) < CACHE_DURATION) {
+        return cachedFreeGames[Math.floor(Math.random() * cachedFreeGames.length)];
+    }
+    
+    console.log('🔄 Fetching free Steam games...');
+    let games = await fetchFreeSteamGames();
+    
+    if (games.length === 0) {
+        return {
+            id: 730,
+            title: "Counter-Strike 2",
+            description: "CS2 is a free-to-play, competitive first-person shooter. Counter-Strike has become the world's most popular competitive shooter.",
+            imageUrl: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/730/header.jpg",
+            originalPrice: "Free",
+            discount: "100% FREE",
+            developers: "Valve",
+            releaseDate: "Aug 21, 2012",
+            steamUrl: "https://store.steampowered.com/app/730/CounterStrike_2/"
+        };
+    }
+    
+    cachedFreeGames = games;
+    lastFetchTime = now;
+    return games[Math.floor(Math.random() * games.length)];
+}
+
+async function sendFreeGame(channel, game = null) {
+    const gameData = game || await getRandomFreeGame();
+    
+    const embed = new EmbedBuilder()
+        .setColor(0x00FF00)
+        .setTitle(`🎮 ${gameData.title}`)
+        .setURL(gameData.steamUrl)
+        .setDescription(gameData.description)
+        .setThumbnail(gameData.imageUrl)
+        .setImage(`https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${gameData.id}/header.jpg`)
+        .addFields(
+            { name: '💰 Price', value: `~~${gameData.originalPrice}~~ → **FREE!**`, inline: true },
+            { name: '🏷️ Discount', value: gameData.discount, inline: true },
+            { name: '👨‍💻 Developer', value: gameData.developers, inline: true },
+            { name: '📅 Release', value: gameData.releaseDate, inline: true },
+            { name: '🔗 Steam Link', value: `[Click to Get Game](${gameData.steamUrl})`, inline: false }
+        )
+        .setFooter({ text: 'Free games updated hourly • Get them while they\'re free!' })
+        .setTimestamp();
+    
+    await channel.send({ embeds: [embed] });
+}
 
 // ============================================
 // USER STATS FUNCTIONS
@@ -72,8 +181,7 @@ function updateMessageStats(userId, messages = 1) {
                 newXp -= newLevel * 100;
                 newLevel++;
             }
-            db.run(`UPDATE user_stats SET messages = messages + ?, xp = ?, level = ? WHERE user_id = ?`,
-                [messages, newXp, newLevel, userId]);
+            db.run(`UPDATE user_stats SET messages = messages + ?, xp = ?, level = ? WHERE user_id = ?`, [messages, newXp, newLevel, userId]);
         }
     });
 }
@@ -82,8 +190,7 @@ function updateVoiceStats(userId, additionalMinutes) {
     return new Promise((resolve) => {
         db.get(`SELECT * FROM user_stats WHERE user_id = ?`, [userId], (err, row) => {
             if (!row) {
-                db.run(`INSERT INTO user_stats (user_id, messages, voice_minutes, xp, level) VALUES (?, 0, ?, ?, 1)`, 
-                    [userId, additionalMinutes, Math.floor(additionalMinutes / 60)], () => resolve());
+                db.run(`INSERT INTO user_stats (user_id, messages, voice_minutes, xp, level) VALUES (?, 0, ?, ?, 1)`, [userId, additionalMinutes, Math.floor(additionalMinutes / 60)], () => resolve());
             } else {
                 const newVoiceMinutes = row.voice_minutes + additionalMinutes;
                 let newXp = row.xp + Math.floor(additionalMinutes / 60);
@@ -92,8 +199,7 @@ function updateVoiceStats(userId, additionalMinutes) {
                     newXp -= newLevel * 100;
                     newLevel++;
                 }
-                db.run(`UPDATE user_stats SET voice_minutes = ?, xp = ?, level = ? WHERE user_id = ?`,
-                    [newVoiceMinutes, newXp, newLevel, userId], () => resolve());
+                db.run(`UPDATE user_stats SET voice_minutes = ?, xp = ?, level = ? WHERE user_id = ?`, [newVoiceMinutes, newXp, newLevel, userId], () => resolve());
             }
         });
     });
@@ -108,116 +214,48 @@ function getAllStats(guildId) {
 }
 
 // ============================================
-// VOICE TRACKING - FIXED
+// VOICE TRACKING
 // ============================================
-// Track when user joins a voice channel
 client.on('voiceStateUpdate', async (oldState, newState) => {
     const userId = newState.member?.id || oldState.member?.id;
     if (!userId) return;
 
-    // User JOINED a voice channel (was not in any, now is in one)
     if (!oldState.channelId && newState.channelId) {
-        voiceStartTimes.set(userId, {
-            startTime: Date.now(),
-            channelId: newState.channelId
-        });
-        console.log(`🎤 ${newState.member?.user?.tag} joined voice at ${new Date().toLocaleTimeString()}`);
+        voiceStartTimes.set(userId, { startTime: Date.now(), channelId: newState.channelId });
+        console.log(`🎤 ${newState.member?.user?.tag} joined voice`);
     }
-    
-    // User LEFT a voice channel (was in one, now not in any)
     else if (oldState.channelId && !newState.channelId) {
         const session = voiceStartTimes.get(userId);
         if (session) {
-            const durationMs = Date.now() - session.startTime;
-            const durationMinutes = Math.floor(durationMs / 60000);
-            
+            const durationMinutes = Math.floor((Date.now() - session.startTime) / 60000);
             if (durationMinutes > 0) {
                 await updateVoiceStats(userId, durationMinutes);
-                console.log(`🎤 ${oldState.member?.user?.tag} left voice. Added ${durationMinutes} minutes. Total: ${durationMinutes} min this session`);
-            } else {
-                console.log(`🎤 ${oldState.member?.user?.tag} left voice. Session too short (${Math.floor(durationMs / 1000)}s) - not counted`);
+                console.log(`🎤 ${oldState.member?.user?.tag} left voice. Added ${durationMinutes} minutes`);
             }
             voiceStartTimes.delete(userId);
-        } else {
-            console.log(`⚠️ No start time found for ${oldState.member?.user?.tag} when leaving`);
         }
     }
-    
-    // User MOVED between voice channels
     else if (oldState.channelId && newState.channelId && oldState.channelId !== newState.channelId) {
         const session = voiceStartTimes.get(userId);
         if (session) {
-            // Calculate time spent in previous channel
-            const durationMs = Date.now() - session.startTime;
-            const durationMinutes = Math.floor(durationMs / 60000);
-            
+            const durationMinutes = Math.floor((Date.now() - session.startTime) / 60000);
             if (durationMinutes > 0) {
                 await updateVoiceStats(userId, durationMinutes);
-                console.log(`🎤 ${newState.member?.user?.tag} moved channels. Added ${durationMinutes} minutes from previous channel`);
+                console.log(`🎤 ${newState.member?.user?.tag} moved channels. Added ${durationMinutes} minutes`);
             }
-            
-            // Reset start time for new channel
-            voiceStartTimes.set(userId, {
-                startTime: Date.now(),
-                channelId: newState.channelId
-            });
-        } else {
-            // No tracking found, start new tracking
-            voiceStartTimes.set(userId, {
-                startTime: Date.now(),
-                channelId: newState.channelId
-            });
-            console.log(`🎤 Started tracking ${newState.member?.user?.tag} after channel move`);
+            voiceStartTimes.set(userId, { startTime: Date.now(), channelId: newState.channelId });
         }
     }
 });
 
-// Periodic check for users still in voice (backup save every 5 minutes)
-setInterval(async () => {
-    if (voiceStartTimes.size === 0) return;
-    
-    console.log(`🔄 Voice check: Tracking ${voiceStartTimes.size} users in voice`);
-    
-    for (const [userId, session] of voiceStartTimes) {
-        const durationMs = Date.now() - session.startTime;
-        const durationMinutes = Math.floor(durationMs / 60000);
-        
-        if (durationMinutes >= 5) {
-            // Save every 5 minutes of continuous voice time
-            await updateVoiceStats(userId, 5);
-            // Reset the start time to now after saving
-            voiceStartTimes.set(userId, {
-                startTime: Date.now(),
-                channelId: session.channelId
-            });
-            console.log(`🔄 Auto-saved 5 minutes for user ${userId}`);
-        }
-    }
-}, 300000); // Check every 5 minutes
-
-// Save voice time on bot shutdown
-async function saveAllVoiceTime() {
-    console.log(`💾 Saving voice time for ${voiceStartTimes.size} users before shutdown...`);
-    for (const [userId, session] of voiceStartTimes) {
-        const durationMs = Date.now() - session.startTime;
-        const durationMinutes = Math.floor(durationMs / 60000);
-        if (durationMinutes > 0) {
-            await updateVoiceStats(userId, durationMinutes);
-            console.log(`💾 Saved ${durationMinutes} minutes for user ${userId}`);
-        }
-    }
-}
-
-// ============================================
-// MESSAGE TRACKING
-// ============================================
+// Message tracking
 client.on('messageCreate', async (msg) => {
     if (msg.author.bot || !msg.guild) return;
     updateMessageStats(msg.author.id, 1);
 });
 
 // ============================================
-// HELPER FUNCTIONS
+// HELPER FUNCTIONS (existing)
 // ============================================
 function isMod(member) {
     if (!member) return false;
@@ -586,8 +624,6 @@ client.on('interactionCreate', async (interaction) => {
 // ============================================
 // STATS COMMANDS
 // ============================================
-
-// !info - Full user stats embed
 async function cmdInfo(message, targetUser) {
     const stats = await getUserStats(targetUser.id);
     const member = await getMember(message.guild, targetUser.id);
@@ -611,8 +647,7 @@ async function cmdInfo(message, targetUser) {
             { name: '📅 Server Info', value: `**Joined:** <t:${Math.floor(member.joinedTimestamp / 1000)}:R>\n**Roles:** ${member.roles.cache.size}`, inline: true },
             { name: '━━━━━━━━━━━━━━━━━━', value: ' ', inline: false },
             { name: '📈 Level & XP', value: `**Level:** ${stats.level}\n**XP:** ${Math.floor(stats.xp)} / ${xpNeeded} (${xpProgress}%)\n**Rank:** #${rank} in server`, inline: true },
-            { name: '📊 Activity Stats', value: `**Messages:** ${stats.messages.toLocaleString()}\n**Voice Time:** ${formatVoiceTime(voiceTime)}\n**Warnings:** ${warnCount}`, inline: true },
-            { name: '━━━━━━━━━━━━━━━━━━', value: ' ', inline: false }
+            { name: '📊 Activity Stats', value: `**Messages:** ${stats.messages.toLocaleString()}\n**Voice Time:** ${formatVoiceTime(voiceTime)}\n**Warnings:** ${warnCount}`, inline: true }
         )
         .setFooter({ text: 'Use !rank, !top, !messages, !voice for more details' })
         .setTimestamp();
@@ -620,7 +655,6 @@ async function cmdInfo(message, targetUser) {
     await message.reply({ embeds: [embed] });
 }
 
-// !rank - Shows rank and XP progress
 async function cmdRank(message, targetUser) {
     const stats = await getUserStats(targetUser.id);
     const allStats = await getAllStats(message.guild.id);
@@ -647,7 +681,6 @@ async function cmdRank(message, targetUser) {
     await message.reply({ embeds: [embed] });
 }
 
-// !top - Leaderboard
 async function cmdTop(message, type = 'xp') {
     const allStats = await getAllStats(message.guild.id);
     const sorted = allStats.sort((a, b) => {
@@ -680,7 +713,6 @@ async function cmdTop(message, type = 'xp') {
     await message.reply({ embeds: [embed] });
 }
 
-// !messages - Show message count
 async function cmdMessages(message, targetUser) {
     const stats = await getUserStats(targetUser.id);
     const embed = new EmbedBuilder()
@@ -695,7 +727,6 @@ async function cmdMessages(message, targetUser) {
     await message.reply({ embeds: [embed] });
 }
 
-// !voice - Show voice time
 async function cmdVoice(message, targetUser) {
     const stats = await getUserStats(targetUser.id);
     const hours = Math.floor(stats.voice_minutes / 60);
@@ -730,6 +761,7 @@ client.on('messageCreate', async (message) => {
         const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('🛡️ Bot Commands')
             .setDescription('**Moderation:** `!ban`, `!kick`, `!mute`, `!unmute`, `!warn`, `!clear`, `!lock`, `!unlock`, `!giverole`, `!removerole`, `!unban`')
             .addFields(
+                { name: '🎮 Free Games', value: '`!freegame` - Get a random free Steam game!', inline: false },
                 { name: '📊 Stats Commands', value: '`!info [user]` - Full user stats\n`!rank [user]` - Rank & XP progress\n`!top` - Server leaderboard\n`!messages [user]` - Message count\n`!voice [user]` - Voice time', inline: false },
                 { name: 'ℹ️ Info', value: '`!userinfo`, `!serverinfo`, `!avatar`', inline: false },
                 { name: '📢 Announcements', value: '`!ann <msg>`, `!anni`', inline: false },
@@ -739,6 +771,19 @@ client.on('messageCreate', async (message) => {
                 { name: '💡 Other', value: '`!suggest`, `!giveaway`', inline: false }
             ).setTimestamp();
         return message.reply({ embeds: [embed] });
+    }
+
+    // ========== FREE GAME COMMAND ==========
+    if (cmd === 'freegame') {
+        await message.channel.sendTyping();
+        try {
+            await sendFreeGame(channel);
+            await sendLog(guild, 'FREE GAME REQUEST', 'Channel', member.user, 'Free game command used');
+        } catch (error) {
+            console.error('Free game error:', error);
+            message.reply('❌ Failed to fetch free games. Please try again later.');
+        }
+        return;
     }
 
     // ========== STATS COMMANDS ==========
@@ -776,7 +821,7 @@ client.on('messageCreate', async (message) => {
         return;
     }
 
-    // ========== OLD EXISTING COMMANDS ==========
+    // ========== EXISTING COMMANDS ==========
     if (cmd === 'verif') { await setupVerif(message); }
     else if (cmd === 'resetverif') { db.run(`DELETE FROM verification_config WHERE guild_id = ?`, [guild.id]); message.reply('✅ Reset'); }
     else if (cmd === 'sendpanel') { const cfg = await getVerif(guild.id); if (!cfg) return message.reply('❌ Not configured'); const ch = guild.channels.cache.get(cfg.channel); if (ch) await sendVerifPanel(ch); message.reply(`✅ Panel sent to ${ch}`); }
@@ -943,11 +988,17 @@ client.on('messageCreate', async (message) => {
 });
 
 // ============================================
-// SHUTDOWN HANDLER - Save voice time before exit
+// SHUTDOWN HANDLER
 // ============================================
 async function gracefulShutdown() {
     console.log('🛑 Shutting down gracefully...');
-    await saveAllVoiceTime();
+    for (const [userId, session] of voiceStartTimes) {
+        const durationMinutes = Math.floor((Date.now() - session.startTime) / 60000);
+        if (durationMinutes > 0) {
+            await updateVoiceStats(userId, durationMinutes);
+            console.log(`💾 Saved ${durationMinutes} minutes for user ${userId}`);
+        }
+    }
     db.close(() => {
         console.log('✅ Database closed');
         process.exit(0);
@@ -965,10 +1016,11 @@ process.on('uncaughtException', (err) => console.error('❌ Error:', err.message
 client.once('ready', () => {
     console.log(`✅ ${client.user.tag} is online!`);
     console.log(`📋 Prefix: !`);
+    console.log(`🎮 Free games system ACTIVE - Use !freegame`);
     console.log(`🎤 Voice tracking system ACTIVE`);
     console.log(`📊 Stats commands: !info, !rank, !top, !messages, !voice`);
     console.log(`🛡️ Moderation Bot Ready`);
-    client.user.setActivity('!help', { type: 3 });
+    client.user.setActivity('!help | !freegame', { type: 3 });
 });
 
 client.login(BOT_TOKEN);
