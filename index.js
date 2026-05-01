@@ -1,31 +1,27 @@
 const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const sqlite3 = require('sqlite3').verbose();
-const axios = require('axios');
 require('dotenv').config();
 
 // ============================================
-// DATABASE SETUP
+// DATABASE
 // ============================================
-const db = new sqlite3.Database('./bot_data.db');
+const db = new sqlite3.Database('./data.db');
 
 db.serialize(() => {
-    db.run(`CREATE TABLE IF NOT EXISTS warnings (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, guild_id TEXT, reason TEXT, moderator TEXT, date TEXT)`);
-    db.run(`CREATE TABLE IF NOT EXISTS suggestions (id INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT, user_id TEXT, suggestion TEXT, date TEXT)`);
-    db.run(`CREATE TABLE IF NOT EXISTS giveaways (id INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT, channel_id TEXT, prize TEXT, winners INTEGER, end_time INTEGER)`);
-    db.run(`CREATE TABLE IF NOT EXISTS tickets (user_id TEXT, channel_id TEXT, guild_id TEXT, created_at TEXT, PRIMARY KEY (user_id, guild_id))`);
-    db.run(`CREATE TABLE IF NOT EXISTS ticket_config (guild_id TEXT PRIMARY KEY, panel_channel TEXT, category TEXT, log_channel TEXT, support_role TEXT)`);
+    db.run(`CREATE TABLE IF NOT EXISTS warns (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, guild_id TEXT, reason TEXT, moderator TEXT, date TEXT)`);
+    db.run(`CREATE TABLE IF NOT EXISTS tickets (user_id TEXT, channel_id TEXT, guild_id TEXT, PRIMARY KEY (user_id, guild_id))`);
+    db.run(`CREATE TABLE IF NOT EXISTS ticket_config (guild_id TEXT PRIMARY KEY, category TEXT, log_channel TEXT, support_role TEXT)`);
     db.run(`CREATE TABLE IF NOT EXISTS reaction_roles (guild_id TEXT, message_id TEXT, channel_id TEXT, emoji TEXT, role_id TEXT)`);
-    db.run(`CREATE TABLE IF NOT EXISTS verification_config (guild_id TEXT PRIMARY KEY, auto_role TEXT, verified_role TEXT, channel TEXT, image_url TEXT, setup_by TEXT, setup_at TEXT)`);
-    db.run(`CREATE TABLE IF NOT EXISTS user_stats (user_id TEXT PRIMARY KEY, messages INTEGER DEFAULT 0, voice_minutes INTEGER DEFAULT 0, xp INTEGER DEFAULT 0, level INTEGER DEFAULT 1)`);
-    db.run(`CREATE TABLE IF NOT EXISTS free_games_sent (id INTEGER PRIMARY KEY AUTOINCREMENT, game_id TEXT UNIQUE, title TEXT, sent_at TEXT)`);
-    console.log('✅ Database ready');
+    db.run(`CREATE TABLE IF NOT EXISTS verification (guild_id TEXT PRIMARY KEY, auto_role TEXT, verified_role TEXT, channel TEXT, image_url TEXT)`);
+    db.run(`CREATE TABLE IF NOT EXISTS stats (user_id TEXT PRIMARY KEY, messages INTEGER DEFAULT 0, voice INTEGER DEFAULT 0)`);
+    console.log('✅ Database prête');
 });
 
 // ============================================
 // CONFIG
 // ============================================
-const { BOT_TOKEN, LOG_CHANNEL_ID, MOD_ROLE_ID, AUTO_ROLE_ID, WELCOME_IMAGE_URL } = process.env;
-if (!BOT_TOKEN) { console.error('❌ Missing BOT_TOKEN'); process.exit(1); }
+const { BOT_TOKEN, LOG_CHANNEL_ID, MOD_ROLE_ID, AUTO_ROLE_ID, WELCOME_CHANNEL_ID } = process.env;
+if (!BOT_TOKEN) { console.error('❌ Token manquant'); process.exit(1); }
 
 const client = new Client({
     intents: [
@@ -34,83 +30,9 @@ const client = new Client({
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.GuildModeration,
-        GatewayIntentBits.GuildVoiceStates,
-        GatewayIntentBits.GuildMessageReactions
+        GatewayIntentBits.GuildVoiceStates
     ]
 });
-
-// ============================================
-// STORAGE
-// ============================================
-const spamMap = new Map();
-const voiceStartTimes = new Map();
-const activeFreeGameSessions = new Map();
-const sentGamesCache = new Set();
-
-// ============================================
-// FREE GAMES LIST
-// ============================================
-const FREE_STEAM_GAMES = [
-    { id: 730, title: "Counter-Strike 2", desc: "CS2 is a free-to-play competitive first-person shooter.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/730/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/730/CounterStrike_2/" },
-    { id: 570, title: "Dota 2", desc: "The most popular MOBA game.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/570/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/570/Dota_2/" },
-    { id: 440, title: "Team Fortress 2", desc: "Class-based team shooter with 9 unique classes.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/440/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/440/Team_Fortress_2/" },
-    { id: 1172470, title: "Apex Legends", desc: "Battle royale shooter with unique legends.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1172470/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/1172470/Apex_Legends/" },
-    { id: 1085660, title: "Destiny 2", desc: "First-person action MMO.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1085660/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/1085660/Destiny_2/" },
-    { id: 444090, title: "Paladins", desc: "Fantasy team-based shooter.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/444090/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/444090/Paladins/" },
-    { id: 230410, title: "Warframe", desc: "Co-op space ninja game.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/230410/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/230410/Warframe/" },
-    { id: 2169380, title: "The Finals", desc: "High-stakes competitive shooter.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/2169380/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/2169380/THE_FINALS/" },
-    { id: 1477560, title: "Rocket League", desc: "High-powered hybrid of arcade soccer and driving.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1477560/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/1477560/Rocket_League/" },
-    { id: 1238840, title: "PUBG: BATTLEGROUNDS", desc: "Battle royale where 100 players fight.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1238840/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/1238840/PUBG_BATTLEGROUNDS/" }
-];
-
-// Load sent games from database
-async function loadSentGames() {
-    return new Promise((resolve) => {
-        db.all(`SELECT game_id FROM free_games_sent`, [], (err, rows) => {
-            if (rows) rows.forEach(row => sentGamesCache.add(String(row.game_id)));
-            console.log(`📚 Loaded ${sentGamesCache.size} previously sent free games`);
-            resolve();
-        });
-    });
-}
-
-async function markGameAsSent(gameId, title) {
-    return new Promise((resolve) => {
-        db.run(`INSERT OR IGNORE INTO free_games_sent (game_id, title, sent_at) VALUES (?, ?, ?)`,
-            [String(gameId), title, new Date().toISOString()], () => {
-                sentGamesCache.add(String(gameId));
-                resolve();
-            });
-    });
-}
-
-async function getRandomFreeGame() {
-    const availableGames = FREE_STEAM_GAMES.filter(g => !sentGamesCache.has(String(g.id)));
-    if (availableGames.length === 0) {
-        sentGamesCache.clear();
-        db.run(`DELETE FROM free_games_sent`, []);
-        return FREE_STEAM_GAMES[Math.floor(Math.random() * FREE_STEAM_GAMES.length)];
-    }
-    return availableGames[Math.floor(Math.random() * availableGames.length)];
-}
-
-async function sendFreeGameEmbed(channel, game) {
-    const embed = new EmbedBuilder()
-        .setColor(0x00FF00)
-        .setTitle(`🎮 ${game.title}`)
-        .setURL(game.url)
-        .setDescription(game.desc)
-        .setThumbnail(game.image)
-        .setImage(game.image)
-        .addFields(
-            { name: '💰 Price', value: `~~${game.price}~~ → **FREE!**`, inline: true },
-            { name: '🔗 Download', value: `[Get Game for Free](${game.url})`, inline: false }
-        )
-        .setFooter({ text: 'Free game every 3 minutes!' })
-        .setTimestamp();
-    await channel.send({ embeds: [embed] });
-    await markGameAsSent(game.id, game.title);
-}
 
 // ============================================
 // HELPER FUNCTIONS
@@ -122,16 +44,16 @@ function isMod(member) {
     return false;
 }
 
-async function sendLog(guild, action, target, mod, reason) {
+async function sendLog(guild, action, target, moderator, reason) {
     const ch = guild.channels.cache.get(LOG_CHANNEL_ID);
     if (!ch) return;
     const embed = new EmbedBuilder().setColor(0x2b2d31).setTitle(`📋 ${action}`)
         .addFields(
-            { name: 'Moderator', value: mod?.tag || 'System', inline: true },
-            { name: 'Target', value: target?.tag || target || 'Unknown', inline: true },
-            { name: 'Reason', value: reason || 'No reason', inline: false }
+            { name: 'Modérateur', value: moderator?.tag || 'Système', inline: true },
+            { name: 'Cible', value: target?.tag || target || 'Inconnu', inline: true },
+            { name: 'Raison', value: reason || 'Aucune', inline: false }
         ).setTimestamp();
-    await ch.send({ embeds: [embed] }).catch(() => {});
+    await ch.send({ embeds: [embed] });
 }
 
 async function getMember(guild, id) {
@@ -141,102 +63,62 @@ async function getMember(guild, id) {
 function parseTime(t) {
     const m = t.match(/^(\d+)([smhd])$/);
     if (!m) return null;
-    const v = parseInt(m[1]), u = m[2];
-    if (u === 's') return v * 1000;
-    if (u === 'm') return v * 60000;
-    if (u === 'h') return v * 3600000;
-    if (u === 'd') return v * 86400000;
+    const v = parseInt(m[1]);
+    if (m[2] === 's') return v * 1000;
+    if (m[2] === 'm') return v * 60000;
+    if (m[2] === 'h') return v * 3600000;
+    if (m[2] === 'd') return v * 86400000;
     return null;
 }
 
-function fmtTime(ms) {
-    const m = Math.floor(ms / 60000), h = Math.floor(m / 60), d = Math.floor(h / 24);
-    if (d > 0) return `${d} day(s)`;
-    if (h > 0) return `${h} hour(s)`;
+function formatTime(ms) {
+    const m = Math.floor(ms / 60000);
+    const h = Math.floor(m / 60);
+    const d = Math.floor(h / 24);
+    if (d > 0) return `${d} jour(s)`;
+    if (h > 0) return `${h} heure(s)`;
     if (m > 0) return `${m} minute(s)`;
-    return `${Math.floor(ms / 1000)} second(s)`;
-}
-
-function formatVoiceTime(minutes) {
-    const hours = Math.floor(minutes / 60);
-    const mins = minutes % 60;
-    if (hours > 0) return `${hours}h ${mins}m`;
-    return `${mins}m`;
+    return `${Math.floor(ms / 1000)} seconde(s)`;
 }
 
 // ============================================
-// USER STATS FUNCTIONS
+// STATS
 // ============================================
-async function getUserStats(userId) {
-    return new Promise((resolve) => {
-        db.get(`SELECT * FROM user_stats WHERE user_id = ?`, [userId], (err, row) => {
-            resolve(row || { messages: 0, voice_minutes: 0, xp: 0, level: 1 });
-        });
-    });
-}
-
-function updateMessageStats(userId, messages = 1) {
-    db.get(`SELECT * FROM user_stats WHERE user_id = ?`, [userId], (err, row) => {
+function updateStats(userId, messages = 1, voice = 0) {
+    db.get(`SELECT * FROM stats WHERE user_id = ?`, [userId], (err, row) => {
         if (!row) {
-            db.run(`INSERT INTO user_stats (user_id, messages, voice_minutes, xp, level) VALUES (?, ?, ?, ?, 1)`, [userId, messages, 0, messages]);
+            db.run(`INSERT INTO stats (user_id, messages, voice) VALUES (?, ?, ?)`, [userId, messages, voice]);
         } else {
-            let newXp = row.xp + messages;
-            let newLevel = row.level;
-            while (newXp >= newLevel * 100) { newXp -= newLevel * 100; newLevel++; }
-            db.run(`UPDATE user_stats SET messages = messages + ?, xp = ?, level = ? WHERE user_id = ?`, [messages, newXp, newLevel, userId]);
+            db.run(`UPDATE stats SET messages = messages + ?, voice = voice + ? WHERE user_id = ?`, [messages, voice, userId]);
         }
     });
 }
 
-async function updateVoiceStats(userId, additionalMinutes) {
-    return new Promise((resolve) => {
-        db.get(`SELECT * FROM user_stats WHERE user_id = ?`, [userId], (err, row) => {
-            if (!row) {
-                db.run(`INSERT INTO user_stats (user_id, messages, voice_minutes, xp, level) VALUES (?, 0, ?, ?, 1)`, [userId, additionalMinutes, Math.floor(additionalMinutes / 60)], () => resolve());
-            } else {
-                const newVoiceMinutes = row.voice_minutes + additionalMinutes;
-                let newXp = row.xp + Math.floor(additionalMinutes / 60);
-                let newLevel = row.level;
-                while (newXp >= newLevel * 100) { newXp -= newLevel * 100; newLevel++; }
-                db.run(`UPDATE user_stats SET voice_minutes = ?, xp = ?, level = ? WHERE user_id = ?`, [newVoiceMinutes, newXp, newLevel, userId], () => resolve());
-            }
-        });
-    });
-}
+client.on('messageCreate', async (msg) => {
+    if (msg.author.bot || !msg.guild) return;
+    updateStats(msg.author.id, 1, 0);
+});
 
-async function getAllStats() {
-    return new Promise((resolve) => {
-        db.all(`SELECT user_id, messages, voice_minutes, xp, level FROM user_stats ORDER BY xp DESC`, (err, rows) => {
-            resolve(rows || []);
-        });
-    });
-}
-
-function addWarning(uid, gid, reason, mod) {
-    return new Promise((r) => {
-        db.run(`INSERT INTO warnings (user_id, guild_id, reason, moderator, date) VALUES (?, ?, ?, ?, ?)`,
-            [uid, gid, reason, mod, new Date().toISOString()], () => r());
-    });
-}
-
-function getWarnCount(uid, gid) {
-    return new Promise((r) => {
-        db.get(`SELECT COUNT(*) as c FROM warnings WHERE user_id = ? AND guild_id = ?`, [uid, gid], (err, row) => r(row ? row.c : 0));
-    });
-}
+client.on('voiceStateUpdate', async (old, neu) => {
+    const uid = neu.member?.id || old.member?.id;
+    if (!uid) return;
+    if (!old.channelId && neu.channelId) updateStats(uid, 0, 0);
+});
 
 // ============================================
-// TICKET SYSTEM (Simplified)
+// TICKET SYSTEM
 // ============================================
-function saveTicketConfig(gid, panel, cat, log, role) { db.run(`INSERT OR REPLACE INTO ticket_config VALUES (?, ?, ?, ?, ?)`, [gid, panel, cat, log, role]); }
+function saveTicketConfig(gid, cat, log, role) { db.run(`INSERT OR REPLACE INTO ticket_config VALUES (?, ?, ?, ?)`, [gid, cat, log, role]); }
 function getTicketConfig(gid) { return new Promise((r) => { db.get(`SELECT * FROM ticket_config WHERE guild_id = ?`, [gid], (err, row) => r(row)); }); }
-function saveTicket(uid, cid, gid) { db.run(`INSERT OR REPLACE INTO tickets VALUES (?, ?, ?, ?)`, [uid, cid, gid, new Date().toISOString()]); }
+function saveTicket(uid, cid, gid) { db.run(`INSERT OR REPLACE INTO tickets VALUES (?, ?, ?)`, [uid, cid, gid]); }
 function getTicket(uid, gid) { return new Promise((r) => { db.get(`SELECT * FROM tickets WHERE user_id = ? AND guild_id = ?`, [uid, gid], (err, row) => r(row)); }); }
 function delTicket(uid, gid) { db.run(`DELETE FROM tickets WHERE user_id = ? AND guild_id = ?`, [uid, gid]); }
 
-async function sendTicketPanel(ch, cfg) {
-    const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('🎫 SUPPORT TICKET').setDescription('Click below to create a ticket.').setTimestamp();
-    const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('create_ticket').setLabel('Open Ticket').setEmoji('🎫').setStyle(ButtonStyle.Primary));
+async function sendTicketPanel(ch) {
+    const cfg = await getTicketConfig(ch.guild.id);
+    if (!cfg) return ch.send('❌ Système de tickets non configuré! Utilisez `!ticketsetup`');
+    const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('🎫 SUPPORT TICKET').setDescription('Cliquez ci-dessous pour créer un ticket.').setTimestamp();
+    const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('create_ticket').setLabel('Ouvrir un ticket').setEmoji('🎫').setStyle(ButtonStyle.Primary));
     await ch.send({ embeds: [embed], components: [row] });
 }
 
@@ -247,11 +129,11 @@ function saveRR(gid, mid, cid, emoji, rid) { db.run(`INSERT OR REPLACE INTO reac
 function getRR(gid, mid) { return new Promise((r) => { db.all(`SELECT * FROM reaction_roles WHERE guild_id = ? AND message_id = ?`, [gid, mid], (err, rows) => r(rows || [])); }); }
 
 async function sendRRPanel(ch, phoneId, pcId) {
-    const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('📱 DEVICE ROLES').setDescription('Click a button to get your role!')
-        .addFields({ name: '📱 Phone User', value: `<@&${phoneId}>`, inline: true }, { name: '💻 PC User', value: `<@&${pcId}>`, inline: true });
+    const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('📱 CHOISIS TON APPAREIL').setDescription('Clique sur ton appareil pour obtenir ton rôle!')
+        .addFields({ name: '📱 Téléphone', value: `<@&${phoneId}>`, inline: true }, { name: '💻 PC', value: `<@&${pcId}>`, inline: true });
     const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('role_phone').setLabel('Phone User').setEmoji('📱').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('role_pc').setLabel('PC User').setEmoji('💻').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId('role_phone').setLabel('Téléphone').setEmoji('📱').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('role_pc').setLabel('PC').setEmoji('💻').setStyle(ButtonStyle.Secondary)
     );
     const msg = await ch.send({ embeds: [embed], components: [row] });
     saveRR(ch.guild.id, msg.id, ch.id, '📱', phoneId);
@@ -261,36 +143,16 @@ async function sendRRPanel(ch, phoneId, pcId) {
 // ============================================
 // VERIFICATION SYSTEM
 // ============================================
-function saveVerif(gid, auto, verified, ch, img, by) { db.run(`INSERT OR REPLACE INTO verification_config VALUES (?, ?, ?, ?, ?, ?, ?)`, [gid, auto, verified, ch, img, by, new Date().toISOString()]); }
-function getVerif(gid) { return new Promise((r) => { db.get(`SELECT * FROM verification_config WHERE guild_id = ?`, [gid], (err, row) => r(row)); }); }
+function saveVerif(gid, auto, verified, ch, img) { db.run(`INSERT OR REPLACE INTO verification VALUES (?, ?, ?, ?, ?)`, [gid, auto, verified, ch, img]); }
+function getVerif(gid) { return new Promise((r) => { db.get(`SELECT * FROM verification WHERE guild_id = ?`, [gid], (err, row) => r(row)); }); }
 
 async function sendVerifPanel(ch) {
     const cfg = await getVerif(ch.guild.id);
-    if (!cfg) return ch.send('❌ Verification not configured! Use `!verif`');
-    const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('✅ VERIFY YOURSELF').setDescription(`Welcome to ${ch.guild.name}!\nClick below to verify.`)
+    if (!cfg) return ch.send('❌ Vérification non configurée! Utilisez `!verif`');
+    const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('✅ VERIFICATION').setDescription(`Bienvenue sur **${ch.guild.name}**!\nClique ci-dessous pour vérifier ton compte.`)
         .setImage(cfg.image_url).setThumbnail(ch.guild.iconURL()).setTimestamp();
-    const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('verify_button').setLabel('Verify Yourself').setEmoji('✅').setStyle(ButtonStyle.Success));
+    const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('verify_button').setLabel('Vérifier').setEmoji('✅').setStyle(ButtonStyle.Success));
     await ch.send({ embeds: [embed], components: [row] });
-}
-
-// ============================================
-// ANNOUNCEMENTS
-// ============================================
-async function sendAnn(ch, msg) {
-    const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('📢 ANNOUNCEMENT').setDescription(msg).setThumbnail(ch.guild.iconURL()).setTimestamp();
-    await ch.send({ embeds: [embed] });
-}
-
-async function sendWelcome(ch) {
-    const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(`🌟 WELCOME TO ${ch.guild.name.toUpperCase()} 🌟`).setDescription('> Thank you for joining!')
-        .setThumbnail(ch.guild.iconURL()).setImage(WELCOME_IMAGE_URL || 'https://media.discordapp.net/attachments/1462437612647088335/1482006389843824670/content.png')
-        .addFields(
-            { name: '📢 ANNOUNCEMENTS', value: 'Stay updated', inline: false },
-            { name: '📜 RULES', value: 'Read the rules', inline: false },
-            { name: '🎭 SELF ROLES', value: 'Use !roltest', inline: false },
-            { name: '🔧 COMMANDS', value: 'Use !help', inline: false }
-        ).setTimestamp();
-    await ch.send({ embeds: [embed] });
 }
 
 // ============================================
@@ -300,18 +162,18 @@ async function setupTicket(msg) {
     const filter = (m) => m.author.id === msg.author.id;
     let step = 0;
     const cfg = {};
-    const questions = ['Panel Channel ID:', 'Category ID:', 'Log Channel ID:', 'Support Role ID:'];
-    const names = ['panel_channel', 'category', 'log_channel', 'support_role'];
+    const questions = ['📌 Envoie l\'ID du salon de logs:', '📌 Envoie l\'ID de la catégorie pour les tickets:', '📌 Envoie l\'ID du rôle support:'];
+    const names = ['log_channel', 'category', 'support_role'];
     await msg.reply(questions[0]);
-    const coll = msg.channel.createMessageCollector({ filter, time: 60000, max: 4 });
+    const coll = msg.channel.createMessageCollector({ filter, time: 60000, max: 3 });
     coll.on('collect', async (m) => {
         cfg[names[step]] = m.content.trim();
         step++;
-        if (step < 4) await m.reply(questions[step]);
+        if (step < 3) await m.reply(questions[step]);
         else {
             coll.stop();
-            saveTicketConfig(msg.guild.id, cfg.panel_channel, cfg.category, cfg.log_channel, cfg.support_role);
-            await m.reply('✅ Ticket system configured! Use `!ticket`');
+            saveTicketConfig(msg.guild.id, cfg.category, cfg.log_channel, cfg.support_role);
+            await m.reply('✅ Système de tickets configuré! Utilisez `!ticket`');
         }
     });
 }
@@ -320,7 +182,7 @@ async function setupRR(msg) {
     const filter = (m) => m.author.id === msg.author.id;
     let step = 0;
     const roles = {};
-    const questions = ['Phone Role ID:', 'PC Role ID:'];
+    const questions = ['📱 Envoie l\'ID du rôle Téléphone:', '💻 Envoie l\'ID du rôle PC:'];
     await msg.reply(questions[0]);
     const coll = msg.channel.createMessageCollector({ filter, time: 60000, max: 2 });
     coll.on('collect', async (m) => {
@@ -330,7 +192,7 @@ async function setupRR(msg) {
         else {
             coll.stop();
             await sendRRPanel(msg.channel, roles.phone, roles.pc);
-            await m.reply('✅ Reaction role panel created!');
+            await m.reply('✅ Panneau des rôles créé!');
         }
     });
 }
@@ -339,112 +201,59 @@ async function setupVerif(msg) {
     const filter = (m) => m.author.id === msg.author.id;
     let step = 0;
     const cfg = {};
-    const questions = ['Auto Role ID:', 'Verified Role ID:', 'Channel ID:', 'Image URL:'];
+    const questions = ['📌 Envoie l\'ID du rôle Auto (donné à l\'arrivée):', '📌 Envoie l\'ID du rôle Vérifié:', '📌 Envoie l\'ID du salon:', '📌 Envoie l\'URL de l\'image:'];
     const names = ['auto_role', 'verified_role', 'channel', 'image_url'];
-    await msg.reply('🔧 Verification Setup\n' + questions[0]);
+    await msg.reply('🔧 Configuration de la vérification\n' + questions[0]);
     const coll = msg.channel.createMessageCollector({ filter, time: 120000, max: 4 });
     coll.on('collect', async (m) => {
         const val = m.content.trim();
-        if (step < 3 && !val.match(/^\d+$/)) return m.reply('❌ Send a valid ID (numbers only)');
-        if (step === 3 && !val.match(/^https?:\/\//)) return m.reply('❌ Send a valid URL');
+        if (step < 3 && !val.match(/^\d+$/)) return m.reply('❌ Envoie un ID valide');
+        if (step === 3 && !val.match(/^https?:\/\//)) return m.reply('❌ Envoie une URL valide');
         cfg[names[step]] = val;
         step++;
         if (step < 4) await m.reply(questions[step]);
         else {
             coll.stop();
-            saveVerif(msg.guild.id, cfg.auto_role, cfg.verified_role, cfg.channel, cfg.image_url, msg.author.id);
+            saveVerif(msg.guild.id, cfg.auto_role, cfg.verified_role, cfg.channel, cfg.image_url);
             const ch = msg.guild.channels.cache.get(cfg.channel);
             if (ch) await sendVerifPanel(ch);
-            await m.reply(`✅ Verification configured! Panel sent to <#${cfg.channel}>`);
+            await m.reply(`✅ Vérification configurée! Panel envoyé dans <#${cfg.channel}>`);
         }
     });
 }
 
 // ============================================
-// STATS COMMANDS
+// LOGS
 // ============================================
-async function cmdInfo(message, targetUser) {
-    const stats = await getUserStats(targetUser.id);
-    const member = await getMember(message.guild, targetUser.id);
-    if (!member) return message.reply('❌ User not found');
-    const warnCount = await getWarnCount(targetUser.id, message.guild.id);
-    const allStats = await getAllStats();
-    const rank = allStats.findIndex(s => s.user_id === targetUser.id) + 1 || allStats.length + 1;
-    const xpNeeded = stats.level * 100;
-    const xpProgress = Math.floor((stats.xp / xpNeeded) * 100);
-    const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(`📊 ${targetUser.tag}`).setThumbnail(targetUser.displayAvatarURL({ size: 256 }))
-        .addFields(
-            { name: '👤 User Info', value: `**ID:** ${targetUser.id}\n**Created:** <t:${Math.floor(targetUser.createdTimestamp / 1000)}:R>`, inline: true },
-            { name: '📅 Server Info', value: `**Joined:** <t:${Math.floor(member.joinedTimestamp / 1000)}:R>\n**Roles:** ${member.roles.cache.size}`, inline: true },
-            { name: '📈 Level & XP', value: `**Level:** ${stats.level}\n**XP:** ${Math.floor(stats.xp)} / ${xpNeeded} (${xpProgress}%)\n**Rank:** #${rank} in server`, inline: true },
-            { name: '📊 Activity Stats', value: `**Messages:** ${stats.messages.toLocaleString()}\n**Voice Time:** ${formatVoiceTime(stats.voice_minutes)}\n**Warnings:** ${warnCount}`, inline: true }
-        ).setTimestamp();
-    await message.reply({ embeds: [embed] });
-}
-
-// ============================================
-// TRACKING & LOGS
-// ============================================
-client.on('messageCreate', async (msg) => {
-    if (msg.author.bot || !msg.guild) return;
-    updateMessageStats(msg.author.id, 1);
-});
-
-client.on('voiceStateUpdate', async (old, neu) => {
-    const uid = neu.member?.id || old.member?.id;
-    if (!uid) return;
-    if (!old.channelId && neu.channelId) voiceStartTimes.set(uid, Date.now());
-    else if (old.channelId && !neu.channelId && voiceStartTimes.has(uid)) {
-        const mins = Math.floor((Date.now() - voiceStartTimes.get(uid)) / 60000);
-        if (mins > 0) await updateVoiceStats(uid, mins);
-        voiceStartTimes.delete(uid);
-    }
-});
-
 client.on('messageDelete', async (msg) => {
     if (!msg.guild || msg.author?.bot) return;
     const ch = msg.guild.channels.cache.get(LOG_CHANNEL_ID);
     if (!ch) return;
-    const embed = new EmbedBuilder().setColor(0xEF4444).setTitle('🗑️ Message Deleted').addFields(
-        { name: 'Author', value: msg.author?.tag || 'Unknown', inline: true },
-        { name: 'Channel', value: `<#${msg.channel.id}>`, inline: true },
-        { name: 'Content', value: msg.content?.slice(0, 500) || 'No content', inline: false }
-    ).setTimestamp();
-    await ch.send({ embeds: [embed] }).catch(() => {});
-});
-
-client.on('messageUpdate', async (old, neu) => {
-    if (!old.guild || old.author?.bot || old.content === neu.content) return;
-    const ch = old.guild.channels.cache.get(LOG_CHANNEL_ID);
-    if (!ch) return;
-    const embed = new EmbedBuilder().setColor(0x3B82F6).setTitle('✏️ Message Edited').addFields(
-        { name: 'Author', value: old.author?.tag || 'Unknown', inline: true },
-        { name: 'Channel', value: `<#${old.channel.id}>`, inline: true },
-        { name: 'Before', value: old.content?.slice(0, 500) || 'Empty', inline: false },
-        { name: 'After', value: neu.content?.slice(0, 500) || 'Empty', inline: false }
-    ).setTimestamp();
-    await ch.send({ embeds: [embed] }).catch(() => {});
+    const embed = new EmbedBuilder().setColor(0xEF4444).setTitle('🗑️ Message supprimé')
+        .addFields({ name: 'Auteur', value: msg.author?.tag || 'Inconnu', inline: true }, { name: 'Salon', value: `<#${msg.channel.id}>`, inline: true }, { name: 'Contenu', value: msg.content?.slice(0, 500) || 'Aucun', inline: false }).setTimestamp();
+    await ch.send({ embeds: [embed] });
 });
 
 client.on('guildMemberAdd', async (member) => {
-    const ch = member.guild.channels.cache.get(LOG_CHANNEL_ID);
+    const ch = member.guild.channels.cache.get(WELCOME_CHANNEL_ID);
     if (ch) {
-        const embed = new EmbedBuilder().setColor(0x22C55E).setTitle('👋 Member Joined').setDescription(`${member.user.tag} joined`).setThumbnail(member.user.displayAvatarURL()).setTimestamp();
-        await ch.send({ embeds: [embed] }).catch(() => {});
+        const embed = new EmbedBuilder().setColor(0x22C55E).setTitle('👋 Bienvenue!').setDescription(`${member.user.tag} a rejoint le serveur!`).setThumbnail(member.user.displayAvatarURL()).setTimestamp();
+        await ch.send({ content: `${member.user}`, embeds: [embed] });
     }
     const vcfg = await getVerif(member.guild.id);
-    if (vcfg?.auto_role) await member.roles.add(vcfg.auto_role).catch(() => {});
-    else if (AUTO_ROLE_ID) await member.roles.add(AUTO_ROLE_ID).catch(() => {});
+    if (vcfg?.auto_role) await member.roles.add(vcfg.auto_role);
+    else if (AUTO_ROLE_ID) await member.roles.add(AUTO_ROLE_ID);
 });
 
 client.on('guildMemberRemove', async (member) => {
     const ch = member.guild.channels.cache.get(LOG_CHANNEL_ID);
     if (!ch) return;
-    const embed = new EmbedBuilder().setColor(0xEF4444).setTitle('👋 Member Left').setDescription(`${member.user.tag} left`).setThumbnail(member.user.displayAvatarURL()).setTimestamp();
-    await ch.send({ embeds: [embed] }).catch(() => {});
+    const embed = new EmbedBuilder().setColor(0xEF4444).setTitle('👋 Member left').setDescription(`${member.user.tag} a quitté le serveur`).setThumbnail(member.user.displayAvatarURL()).setTimestamp();
+    await ch.send({ embeds: [embed] });
 });
 
-// Anti-spam/link
+// Anti-spam
+const spamMap = new Map();
 client.on('messageCreate', async (msg) => {
     if (msg.author.bot || !msg.guild || isMod(msg.member)) return;
     const now = Date.now();
@@ -455,49 +264,49 @@ client.on('messageCreate', async (msg) => {
     spamMap.set(key, recent);
     if (recent.length > 5) {
         await msg.delete();
-        const w = await msg.channel.send(`${msg.author}, please don't spam!`);
+        const w = await msg.channel.send(`${msg.author}, pas de spam!`);
         setTimeout(() => w.delete(), 3000);
-        return;
     }
     if (/(https?:\/\/[^\s]+|discord\.gg\/[^\s]+)/i.test(msg.content)) {
         await msg.delete();
-        const w = await msg.channel.send(`${msg.author}, links are not allowed!`);
+        const w = await msg.channel.send(`${msg.author}, les liens sont interdits!`);
         setTimeout(() => w.delete(), 5000);
     }
 });
 
 // ============================================
-// BUTTON HANDLER
+// BUTTONS
 // ============================================
 client.on('interactionCreate', async (interaction) => {
     if (!interaction.isButton()) return;
 
     if (interaction.customId === 'verify_button') {
         const cfg = await getVerif(interaction.guild.id);
-        if (!cfg) return interaction.reply({ content: '❌ Not configured', ephemeral: true });
+        if (!cfg) return interaction.reply({ content: '❌ Non configuré', ephemeral: true });
         try {
             if (cfg.auto_role && interaction.member.roles.cache.has(cfg.auto_role)) await interaction.member.roles.remove(cfg.auto_role);
             await interaction.member.roles.add(cfg.verified_role);
-            await interaction.reply({ embeds: [new EmbedBuilder().setColor(0x22C55E).setTitle('✅ Verified!').setDescription(`Welcome to ${interaction.guild.name}!`)], ephemeral: true });
-        } catch(e) { interaction.reply({ content: '❌ Failed', ephemeral: true }); }
+            await interaction.reply({ embeds: [new EmbedBuilder().setColor(0x22C55E).setTitle('✅ Vérifié!').setDescription(`Bienvenue ${interaction.guild.name}!`)], ephemeral: true });
+        } catch(e) { interaction.reply({ content: '❌ Erreur', ephemeral: true }); }
     }
     else if (interaction.customId === 'role_phone' || interaction.customId === 'role_pc') {
         const roles = await getRR(interaction.guild.id, interaction.message.id);
-        const role = roles.find(r => r.emoji === (interaction.customId === 'role_phone' ? '📱' : '💻'));
+        const targetEmoji = interaction.customId === 'role_phone' ? '📱' : '💻';
+        const role = roles.find(r => r.emoji === targetEmoji);
         if (role) {
             const r = interaction.guild.roles.cache.get(role.role_id);
             if (r) {
                 if (interaction.member.roles.cache.has(r.id)) await interaction.member.roles.remove(r);
                 else await interaction.member.roles.add(r);
-                await interaction.reply({ content: `✅ ${interaction.member.roles.cache.has(r.id) ? 'Removed' : 'Added'} ${r.name}`, ephemeral: true });
+                await interaction.reply({ content: `✅ ${interaction.member.roles.cache.has(r.id) ? 'Retiré' : 'Ajouté'} ${r.name}`, ephemeral: true });
             }
         }
     }
     else if (interaction.customId === 'create_ticket') {
         const existing = await getTicket(interaction.user.id, interaction.guild.id);
-        if (existing) return interaction.reply({ content: `❌ You have a ticket: <#${existing.channel_id}>`, ephemeral: true });
+        if (existing) return interaction.reply({ content: `❌ Tu as déjà un ticket: <#${existing.channel_id}>`, ephemeral: true });
         const cfg = await getTicketConfig(interaction.guild.id);
-        if (!cfg?.category) return interaction.reply({ content: '❌ Ticket system not configured', ephemeral: true });
+        if (!cfg?.category) return interaction.reply({ content: '❌ Système non configuré', ephemeral: true });
         const ch = await interaction.guild.channels.create({
             name: `ticket-${interaction.user.username}`,
             type: ChannelType.GuildText,
@@ -509,38 +318,28 @@ client.on('interactionCreate', async (interaction) => {
             ]
         });
         saveTicket(interaction.user.id, ch.id, interaction.guild.id);
-        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('🎫 Ticket Created').setDescription('Support will help you soon.').setTimestamp();
+        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('🎫 Ticket créé').setDescription('Un membre du staff va te répondre.').setTimestamp();
         const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('close_ticket').setLabel('Close').setStyle(ButtonStyle.Danger),
-            new ButtonBuilder().setCustomId('claim_ticket').setLabel('Claim').setStyle(ButtonStyle.Secondary)
+            new ButtonBuilder().setCustomId('close_ticket').setLabel('Fermer').setStyle(ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId('claim_ticket').setLabel('Prendre en charge').setStyle(ButtonStyle.Secondary)
         );
         await ch.send({ content: `${interaction.user}`, embeds: [embed], components: [row] });
-        await interaction.reply({ content: `✅ Ticket created: ${ch}`, ephemeral: true });
+        await interaction.reply({ content: `✅ Ticket créé: ${ch}`, ephemeral: true });
     }
     else if (interaction.customId === 'close_ticket') {
-        if (!isMod(interaction.member)) return interaction.reply({ content: '❌ No permission', ephemeral: true });
+        if (!isMod(interaction.member)) return interaction.reply({ content: '❌ Permission refusée', ephemeral: true });
         await delTicket(interaction.user.id, interaction.guild.id);
-        await interaction.reply('🔒 Closing ticket...');
+        await interaction.reply('🔒 Fermeture du ticket...');
         setTimeout(() => interaction.channel.delete(), 3000);
     }
     else if (interaction.customId === 'claim_ticket') {
-        if (!isMod(interaction.member)) return interaction.reply({ content: '❌ No permission', ephemeral: true });
-        await interaction.reply({ embeds: [new EmbedBuilder().setColor(0x22C55E).setTitle('🎫 Claimed').setDescription(`${interaction.user} claimed this ticket`)] });
+        if (!isMod(interaction.member)) return interaction.reply({ content: '❌ Permission refusée', ephemeral: true });
+        await interaction.reply({ embeds: [new EmbedBuilder().setColor(0x22C55E).setTitle('🎫 Ticket pris en charge').setDescription(`${interaction.user} a pris ce ticket en charge`)] });
     }
 });
 
 // ============================================
-// SAVE VOICE TIME ON SHUTDOWN
-// ============================================
-async function saveAllVoiceTime() {
-    for (const [uid, startTime] of voiceStartTimes) {
-        const mins = Math.floor((Date.now() - startTime) / 60000);
-        if (mins > 0) await updateVoiceStats(uid, mins);
-    }
-}
-
-// ============================================
-// COMMANDS
+// COMMANDES !
 // ============================================
 client.on('messageCreate', async (message) => {
     if (message.author.bot || !message.content.startsWith('!')) return;
@@ -548,351 +347,230 @@ client.on('messageCreate', async (message) => {
     const cmd = args.shift().toLowerCase();
     const { member, guild, channel } = message;
 
-    const modCmds = ['ban', 'kick', 'mute', 'unmute', 'warn', 'clear', 'lock', 'unlock', 'giverole', 'removerole', 'unban', 'ann', 'anni', 'ticketsetup', 'ticket', 'giveaway', 'roltest', 'verif', 'sendpanel', 'verifstatus', 'resetverif', 'freegame', 'stopfreegame'];
-    if (modCmds.includes(cmd) && !isMod(member)) return message.reply('❌ You need moderator permissions!');
+    const modCmds = ['ban', 'kick', 'mute', 'unmute', 'warn', 'clear', 'lock', 'unlock', 'giverole', 'removerole', 'unban', 'ticketsetup', 'ticket', 'roltest', 'verif', 'sendpanel', 'verifstatus', 'resetverif'];
+    if (modCmds.includes(cmd) && !isMod(member)) return message.reply('❌ Permission refusée!');
 
     // HELP
     if (cmd === 'help') {
-        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('🛡️ Bot Commands')
-            .setDescription('**Moderation:** `!ban`, `!kick`, `!mute`, `!unmute`, `!warn`, `!clear`, `!lock`, `!unlock`, `!giverole`, `!removerole`, `!unban`')
+        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('🛡️ Commandes du Bot')
+            .setDescription('**Modération:** `!ban`, `!kick`, `!mute`, `!unmute`, `!warn`, `!clear`, `!lock`, `!unlock`, `!giverole`, `!removerole`, `!unban`')
             .addFields(
-                { name: '🎮 Free Games', value: '`!freegame` - Start auto free games\n`!stopfreegame` - Stop', inline: false },
-                { name: '📊 Stats', value: '`!info`, `!rank`, `!top`, `!messages`, `!voice`', inline: false },
-                { name: '🏰 Server Info', value: '`!infoserver` - Server statistics', inline: false },
-                { name: '📢 Announcements', value: '`!ann`, `!anni`', inline: false },
-                { name: '🎫 Ticket', value: '`!ticketsetup`, `!ticket`', inline: false },
-                { name: '🎭 Reaction Roles', value: '`!roltest`', inline: false },
-                { name: '✅ Verification', value: '`!verif`, `!sendpanel`, `!verifstatus`, `!resetverif`', inline: false },
-                { name: '💡 Other', value: '`!userinfo`, `!serverinfo`, `!avatar`, `!suggest`, `!giveaway`', inline: false }
+                { name: 'ℹ️ Info', value: '`!userinfo`, `!serverinfo`, `!avatar`, `!infoserver`', inline: false },
+                { name: '🎫 Tickets', value: '`!ticketsetup`, `!ticket`', inline: false },
+                { name: '🎭 Rôles', value: '`!roltest`', inline: false },
+                { name: '✅ Vérification', value: '`!verif`, `!sendpanel`, `!verifstatus`, `!resetverif`', inline: false }
             ).setTimestamp();
         return message.reply({ embeds: [embed] });
     }
 
-    // ========== CLEAN PROFESSIONAL SERVER INFO COMMAND ==========
+    // INFOSERVER - Version propre et professionnelle
     if (cmd === 'infoserver') {
-        const guild = message.guild;
-        
-        const totalMembers = guild.memberCount;
-        const onlineMembers = guild.members.cache.filter(m => m.presence?.status === 'online' || m.presence?.status === 'idle' || m.presence?.status === 'dnd').size;
-        const voiceMembers = guild.members.cache.filter(m => m.voice.channel).size;
-        const textChannels = guild.channels.cache.filter(c => c.type === ChannelType.GuildText).size;
-        const voiceChannels = guild.channels.cache.filter(c => c.type === ChannelType.GuildVoice).size;
-        const boostCount = guild.premiumSubscriptionCount || 0;
-        const boostLevel = guild.premiumTier;
-        const createdDate = `<t:${Math.floor(guild.createdTimestamp / 1000)}:D>`;
-        
-        const boostEmoji = boostLevel === 0 ? '⭐' : boostLevel === 1 ? '🌟' : boostLevel === 2 ? '✨' : '💎';
+        const total = guild.memberCount;
+        const online = guild.members.cache.filter(m => m.presence?.status === 'online').size;
+        const voice = guild.members.cache.filter(m => m.voice.channel).size;
+        const text = guild.channels.cache.filter(c => c.type === ChannelType.GuildText).size;
+        const vocal = guild.channels.cache.filter(c => c.type === ChannelType.GuildVoice).size;
+        const boosts = guild.premiumSubscriptionCount || 0;
+        const level = guild.premiumTier;
+        const created = `<t:${Math.floor(guild.createdTimestamp / 1000)}:D>`;
         
         const embed = new EmbedBuilder()
             .setColor(0x5865F2)
             .setTitle(`🏰 ${guild.name}`)
-            .setThumbnail(guild.iconURL({ size: 1024, dynamic: true }))
-            .setDescription(guild.description || null)
+            .setThumbnail(guild.iconURL({ size: 1024 }))
             .addFields(
-                { name: '👥 Members', value: `**${totalMembers.toLocaleString()}** total\n🟢 **${onlineMembers}** online`, inline: true },
-                { name: '🎧 Voice', value: `**${voiceMembers}** in voice\n🎤 **${voiceChannels}** channels`, inline: true },
-                { name: '📊 Channels', value: `💬 **${textChannels}** text\n🔊 **${voiceChannels}** voice`, inline: true },
-                { name: `${boostEmoji} Boost`, value: `Level **${boostLevel}**\n**${boostCount}** boosts`, inline: true },
-                { name: '📅 Created', value: `${createdDate}`, inline: true }
+                { name: '👥 Membres', value: `**${total}** total\n🟢 **${online}** en ligne`, inline: true },
+                { name: '🎧 Vocal', value: `**${voice}** en vocal\n🎤 **${vocal}** salons`, inline: true },
+                { name: '📊 Salons', value: `💬 **${text}** texte\n🔊 **${vocal}** vocal`, inline: true },
+                { name: `${level === 0 ? '⭐' : '💎'} Boost`, value: `Niveau **${level}**\n**${boosts}** boosts`, inline: true },
+                { name: '📅 Création', value: `${created}`, inline: true }
             )
-            .setFooter({ text: `Server ID: ${guild.id}` })
-            .setTimestamp();
-        
-        await message.reply({ embeds: [embed] });
-        return;
-    }
-
-    // FREE GAMES
-    if (cmd === 'freegame') {
-        if (activeFreeGameSessions.has(channel.id)) {
-            return message.reply('❌ Already sending free games in this channel! Use `!stopfreegame` to stop.');
-        }
-        
-        await message.reply('🎮 **Starting Free Games!**\nFirst game coming now...');
-        
-        const firstGame = await getRandomFreeGame();
-        await sendFreeGameEmbed(channel, firstGame);
-        
-        const interval = setInterval(async () => {
-            try {
-                const game = await getRandomFreeGame();
-                await sendFreeGameEmbed(channel, game);
-            } catch (error) {
-                console.error('Auto free game error:', error);
-            }
-        }, 180000);
-        
-        activeFreeGameSessions.set(channel.id, interval);
-        await sendLog(guild, 'FREE GAMES STARTED', 'Channel', member.user, `Started in #${channel.name}`);
-        return;
-    }
-    
-    if (cmd === 'stopfreegame') {
-        const interval = activeFreeGameSessions.get(channel.id);
-        if (interval) {
-            clearInterval(interval);
-            activeFreeGameSessions.delete(channel.id);
-            message.reply('⏹️ **Stopped sending free games.**');
-            await sendLog(guild, 'FREE GAMES STOPPED', 'Channel', member.user, `Stopped in #${channel.name}`);
-        } else {
-            message.reply('❌ No active free game session in this channel.');
-        }
-        return;
-    }
-
-    // STATS COMMANDS
-    if (cmd === 'info') {
-        let target = member.user;
-        if (args[0]) { try { target = await client.users.fetch(args[0]); } catch(e) { return message.reply('❌ User not found'); } }
-        await cmdInfo(message, target);
-        return;
-    }
-    if (cmd === 'rank') {
-        let target = member.user;
-        if (args[0]) { try { target = await client.users.fetch(args[0]); } catch(e) { return message.reply('❌ User not found'); } }
-        const stats = await getUserStats(target.id);
-        const allStats = await getAllStats();
-        const rank = allStats.findIndex(s => s.user_id === target.id) + 1 || allStats.length + 1;
-        const xpNeeded = stats.level * 100;
-        const xpProgress = Math.floor((stats.xp / xpNeeded) * 100);
-        const bar = '█'.repeat(Math.floor((xpProgress / 100) * 20)) + '░'.repeat(20 - Math.floor((xpProgress / 100) * 20));
-        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(`🏆 ${target.tag} - Rank #${rank}`)
-            .setDescription(`**Level ${stats.level}**\n\`${bar}\` ${xpProgress}%`)
-            .addFields({ name: '📊 XP Progress', value: `${Math.floor(stats.xp)} / ${xpNeeded} XP`, inline: true })
+            .setFooter({ text: `ID: ${guild.id}` })
             .setTimestamp();
         await message.reply({ embeds: [embed] });
         return;
     }
-    if (cmd === 'top') {
-        const type = args[0] === 'messages' ? 'messages' : (args[0] === 'voice' ? 'voice' : 'xp');
-        const allStats = await getAllStats();
-        const sorted = [...allStats].sort((a, b) => {
-            if (type === 'xp') return b.xp - a.xp;
-            if (type === 'messages') return b.messages - a.messages;
-            return b.voice_minutes - a.voice_minutes;
-        });
-        const top10 = sorted.slice(0, 10);
-        let description = '';
-        for (let i = 0; i < top10.length; i++) {
-            const user = await client.users.fetch(top10[i].user_id).catch(() => null);
-            const username = user ? user.username : 'Unknown';
-            if (type === 'xp') description += `${i+1}. **${username}** - Level ${top10[i].level} (${Math.floor(top10[i].xp)} XP)\n`;
-            else if (type === 'messages') description += `${i+1}. **${username}** - ${top10[i].messages.toLocaleString()} messages\n`;
-            else description += `${i+1}. **${username}** - ${formatVoiceTime(top10[i].voice_minutes)}\n`;
-        }
-        const titles = { xp: 'XP Leaderboard', messages: 'Messages Leaderboard', voice: 'Voice Time Leaderboard' };
-        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(`🏆 ${titles[type]}`).setDescription(description || 'No data available').setTimestamp();
-        await message.reply({ embeds: [embed] });
-        return;
-    }
-    if (cmd === 'messages') {
-        let target = member.user;
-        if (args[0]) { try { target = await client.users.fetch(args[0]); } catch(e) { return message.reply('❌ User not found'); } }
-        const stats = await getUserStats(target.id);
-        const embed = new EmbedBuilder().setColor(0x57F287).setTitle(`💬 ${target.tag}'s Messages`).setDescription(`**Total Messages:** ${stats.messages.toLocaleString()}`).setTimestamp();
-        await message.reply({ embeds: [embed] });
-        return;
-    }
-    if (cmd === 'voice') {
-        let target = member.user;
-        if (args[0]) { try { target = await client.users.fetch(args[0]); } catch(e) { return message.reply('❌ User not found'); } }
-        const stats = await getUserStats(target.id);
-        const hours = Math.floor(stats.voice_minutes / 60);
-        const minutes = stats.voice_minutes % 60;
-        const embed = new EmbedBuilder().setColor(0xEB459E).setTitle(`🎤 ${target.tag}'s Voice Time`).setDescription(`**Total Time:** ${hours}h ${minutes}m`).setTimestamp();
+
+    // SERVERINFO
+    if (cmd === 'serverinfo') {
+        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(guild.name).setThumbnail(guild.iconURL())
+            .addFields({ name: '👑 Owner', value: `<@${guild.ownerId}>`, inline: true }, { name: '👥 Membres', value: `${guild.memberCount}`, inline: true }, { name: '📅 Créé', value: `<t:${Math.floor(guild.createdTimestamp / 1000)}:R>`, inline: true }).setTimestamp();
         await message.reply({ embeds: [embed] });
         return;
     }
 
-    // VERIFICATION
-    if (cmd === 'verif') { await setupVerif(message); }
-    else if (cmd === 'resetverif') { db.run(`DELETE FROM verification_config WHERE guild_id = ?`, [guild.id]); message.reply('✅ Reset'); }
-    else if (cmd === 'sendpanel') { const cfg = await getVerif(guild.id); if (!cfg) return message.reply('❌ Not configured'); const ch = guild.channels.cache.get(cfg.channel); if (ch) await sendVerifPanel(ch); message.reply(`✅ Panel sent to ${ch}`); }
-    else if (cmd === 'verifstatus') { const cfg = await getVerif(guild.id); if (!cfg) return message.reply('❌ Not configured'); const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('Verification Status').addFields({ name: 'Auto Role', value: `<@&${cfg.auto_role}>`, inline: true }, { name: 'Verified Role', value: `<@&${cfg.verified_role}>`, inline: true }, { name: 'Channel', value: `<#${cfg.channel}>`, inline: true }); message.reply({ embeds: [embed] }); }
-
-    // TICKET
-    else if (cmd === 'ticketsetup') { await setupTicket(message); }
-    else if (cmd === 'ticket') { const cfg = await getTicketConfig(guild.id); if (!cfg) return message.reply('❌ Not configured'); const pc = guild.channels.cache.get(cfg.panel_channel); if (pc) await sendTicketPanel(pc, cfg); message.reply(`✅ Panel sent to ${pc}`); }
-
-    // REACTION ROLES
-    else if (cmd === 'roltest') { await setupRR(message); }
-
-    // MODERATION
-    else if (cmd === 'ban') {
+    // USERINFO
+    if (cmd === 'userinfo') {
         const id = args[0];
-        if (!id) return message.reply('Usage: `!ban <id> [reason]`');
+        const target = id ? await getMember(guild, id) : member;
+        if (!target) return message.reply('❌ Utilisateur non trouvé');
+        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(target.user.tag).setThumbnail(target.user.displayAvatarURL())
+            .addFields({ name: 'ID', value: target.id, inline: true }, { name: 'Rejoint', value: `<t:${Math.floor(target.joinedTimestamp / 1000)}:R>`, inline: true }, { name: 'Compte créé', value: `<t:${Math.floor(target.user.createdTimestamp / 1000)}:R>`, inline: true }).setTimestamp();
+        await message.reply({ embeds: [embed] });
+        return;
+    }
+
+    // AVATAR
+    if (cmd === 'avatar') {
+        const id = args[0];
+        const user = id ? await client.users.fetch(id) : message.author;
+        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(`Avatar de ${user.tag}`).setImage(user.displayAvatarURL({ size: 1024 })).setTimestamp();
+        await message.reply({ embeds: [embed] });
+        return;
+    }
+
+    // BAN
+    if (cmd === 'ban') {
+        const id = args[0];
+        if (!id) return message.reply('Usage: `!ban <id> [raison]`');
         const target = await getMember(guild, id);
-        if (!target) return message.reply('❌ User not found');
-        const reason = args.slice(1).join(' ') || 'No reason';
+        if (!target) return message.reply('❌ Utilisateur non trouvé');
+        const reason = args.slice(1).join(' ') || 'Aucune raison';
         await target.ban({ reason });
-        await message.reply(`✅ Banned ${target.user.tag}`);
+        await message.reply(`✅ Banni ${target.user.tag}`);
         await sendLog(guild, 'BAN', target.user, member.user, reason);
+        return;
     }
-    else if (cmd === 'kick') {
+
+    // KICK
+    if (cmd === 'kick') {
         const id = args[0];
-        if (!id) return message.reply('Usage: `!kick <id> [reason]`');
+        if (!id) return message.reply('Usage: `!kick <id> [raison]`');
         const target = await getMember(guild, id);
-        if (!target) return message.reply('❌ User not found');
-        const reason = args.slice(1).join(' ') || 'No reason';
+        if (!target) return message.reply('❌ Utilisateur non trouvé');
+        const reason = args.slice(1).join(' ') || 'Aucune raison';
         await target.kick(reason);
-        await message.reply(`✅ Kicked ${target.user.tag}`);
+        await message.reply(`✅ Kick ${target.user.tag}`);
         await sendLog(guild, 'KICK', target.user, member.user, reason);
+        return;
     }
-    else if (cmd === 'mute') {
+
+    // MUTE
+    if (cmd === 'mute') {
         const id = args[0], time = args[1];
-        if (!id || !time) return message.reply('Usage: `!mute <id> <time> [reason]`');
+        if (!id || !time) return message.reply('Usage: `!mute <id> <temps> [raison]`');
         const target = await getMember(guild, id);
-        if (!target) return message.reply('❌ User not found');
+        if (!target) return message.reply('❌ Utilisateur non trouvé');
         const ms = parseTime(time);
-        if (!ms) return message.reply('❌ Invalid time. Use: 10s, 5m, 2h, 1d');
-        const reason = args.slice(2).join(' ') || 'No reason';
+        if (!ms) return message.reply('❌ Format invalide. Utilise: 10s, 5m, 2h, 1d');
+        const reason = args.slice(2).join(' ') || 'Aucune raison';
         await target.timeout(ms, reason);
-        await message.reply(`✅ Muted ${target.user.tag} for ${fmtTime(ms)}`);
+        await message.reply(`✅ Mute ${target.user.tag} pour ${formatTime(ms)}`);
         await sendLog(guild, 'MUTE', target.user, member.user, reason);
+        return;
     }
-    else if (cmd === 'unmute') {
+
+    // UNMUTE
+    if (cmd === 'unmute') {
         const id = args[0];
         if (!id) return message.reply('Usage: `!unmute <id>`');
         const target = await getMember(guild, id);
-        if (!target) return message.reply('❌ User not found');
+        if (!target) return message.reply('❌ Utilisateur non trouvé');
         await target.timeout(null);
-        await message.reply(`✅ Unmuted ${target.user.tag}`);
-        await sendLog(guild, 'UNMUTE', target.user, member.user, 'No reason');
+        await message.reply(`✅ Unmute ${target.user.tag}`);
+        await sendLog(guild, 'UNMUTE', target.user, member.user, 'Aucune raison');
+        return;
     }
-    else if (cmd === 'warn') {
+
+    // WARN
+    if (cmd === 'warn') {
         const id = args[0];
-        if (!id) return message.reply('Usage: `!warn <id> [reason]`');
+        if (!id) return message.reply('Usage: `!warn <id> [raison]`');
         const target = await getMember(guild, id);
-        if (!target) return message.reply('❌ User not found');
-        const reason = args.slice(1).join(' ') || 'No reason';
-        await addWarning(target.id, guild.id, reason, member.user.tag);
-        const count = await getWarnCount(target.id, guild.id);
-        await message.reply(`✅ Warned ${target.user.tag} (Total: ${count})`);
+        if (!target) return message.reply('❌ Utilisateur non trouvé');
+        const reason = args.slice(1).join(' ') || 'Aucune raison';
+        db.run(`INSERT INTO warns (user_id, guild_id, reason, moderator, date) VALUES (?, ?, ?, ?, ?)`, [target.id, guild.id, reason, member.user.tag, new Date().toISOString()]);
+        await message.reply(`✅ Warn envoyé à ${target.user.tag}`);
         await sendLog(guild, 'WARN', target.user, member.user, reason);
+        return;
     }
-    else if (cmd === 'clear') {
+
+    // CLEAR
+    if (cmd === 'clear') {
         const amount = parseInt(args[0]);
         if (!amount || amount < 1 || amount > 100) return message.reply('Usage: `!clear <1-100>`');
-        try {
-            const fetched = await channel.messages.fetch({ limit: amount });
-            const deleted = await channel.bulkDelete(fetched);
-            const reply = await message.reply(`✅ Deleted ${deleted.size} messages`);
-            setTimeout(() => reply.delete(), 3000);
-        } catch(e) { message.reply('❌ Failed to clear messages'); }
+        const fetched = await channel.messages.fetch({ limit: amount });
+        const deleted = await channel.bulkDelete(fetched);
+        const reply = await message.reply(`✅ Supprimé ${deleted.size} messages`);
+        setTimeout(() => reply.delete(), 3000);
+        return;
     }
-    else if (cmd === 'lock') { await channel.permissionOverwrites.edit(guild.id, { SendMessages: false }); message.reply('🔒 Channel locked'); }
-    else if (cmd === 'unlock') { await channel.permissionOverwrites.edit(guild.id, { SendMessages: null }); message.reply('🔓 Channel unlocked'); }
-    else if (cmd === 'giverole') {
+
+    // LOCK
+    if (cmd === 'lock') {
+        await channel.permissionOverwrites.edit(guild.id, { SendMessages: false });
+        await message.reply('🔒 Salon verrouillé');
+        return;
+    }
+
+    // UNLOCK
+    if (cmd === 'unlock') {
+        await channel.permissionOverwrites.edit(guild.id, { SendMessages: null });
+        await message.reply('🔓 Salon déverrouillé');
+        return;
+    }
+
+    // GIVEROLE
+    if (cmd === 'giverole') {
         const uid = args[0], rid = args[1];
         if (!uid || !rid) return message.reply('Usage: `!giverole <id> <roleid>`');
         const target = await getMember(guild, uid);
         const role = guild.roles.cache.get(rid);
-        if (!target || !role) return message.reply('❌ Not found');
+        if (!target || !role) return message.reply('❌ Utilisateur ou rôle non trouvé');
         await target.roles.add(role);
-        await message.reply(`✅ Added ${role.name} to ${target.user.tag}`);
+        await message.reply(`✅ Ajouté ${role.name} à ${target.user.tag}`);
+        return;
     }
-    else if (cmd === 'removerole') {
+
+    // REMOVEROLE
+    if (cmd === 'removerole') {
         const uid = args[0], rid = args[1];
         if (!uid || !rid) return message.reply('Usage: `!removerole <id> <roleid>`');
         const target = await getMember(guild, uid);
         const role = guild.roles.cache.get(rid);
-        if (!target || !role) return message.reply('❌ Not found');
+        if (!target || !role) return message.reply('❌ Utilisateur ou rôle non trouvé');
         await target.roles.remove(role);
-        await message.reply(`✅ Removed ${role.name} from ${target.user.tag}`);
+        await message.reply(`✅ Retiré ${role.name} de ${target.user.tag}`);
+        return;
     }
-    else if (cmd === 'unban') {
+
+    // UNBAN
+    if (cmd === 'unban') {
         const uid = args[0];
         if (!uid) return message.reply('Usage: `!unban <id>`');
-        try {
-            const user = await client.users.fetch(uid);
-            await guild.members.unban(user);
-            await message.reply(`✅ Unbanned ${user.tag}`);
-        } catch(e) { message.reply('❌ User not found or not banned'); }
+        const user = await client.users.fetch(uid);
+        await guild.members.unban(user);
+        await message.reply(`✅ Unban ${user.tag}`);
+        return;
     }
-    else if (cmd === 'userinfo') {
-        const id = args[0];
-        const target = id ? await getMember(guild, id) : member;
-        if (!target) return message.reply('❌ User not found');
-        const warns = await getWarnCount(target.id, guild.id);
-        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(target.user.tag).setThumbnail(target.user.displayAvatarURL())
-            .addFields({ name: 'ID', value: target.id, inline: true }, { name: 'Joined', value: `<t:${Math.floor(target.joinedTimestamp / 1000)}:R>`, inline: true }, { name: 'Warnings', value: `${warns}`, inline: true }).setTimestamp();
-        await message.reply({ embeds: [embed] });
-    }
-    else if (cmd === 'avatar') {
-        const id = args[0];
-        const user = id ? await client.users.fetch(id).catch(() => null) : message.author;
-        if (!user) return message.reply('❌ User not found');
-        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(`${user.tag}'s Avatar`).setImage(user.displayAvatarURL({ size: 1024 })).setTimestamp();
-        await message.reply({ embeds: [embed] });
-    }
-    else if (cmd === 'ann') {
-        const text = args.join(' ');
-        if (!text) return message.reply('Usage: `!ann <message>`');
-        await message.delete().catch(() => {});
-        await sendAnn(channel, text);
-    }
-    else if (cmd === 'anni') {
-        await message.delete().catch(() => {});
-        await sendWelcome(channel);
-    }
-    else if (cmd === 'suggest') {
-        const sug = args.join(' ');
-        if (!sug) return message.reply('Usage: `!suggest <message>`');
-        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('💡 Suggestion').setDescription(sug).setAuthor({ name: member.user.tag }).setTimestamp();
-        const msg = await channel.send({ embeds: [embed] });
-        await msg.react('✅'); await msg.react('❌');
-        db.run(`INSERT INTO suggestions (message_id, user_id, suggestion, date) VALUES (?, ?, ?, ?)`, [msg.id, member.user.id, sug, new Date().toISOString()]);
-        await message.reply('✅ Suggestion submitted!');
-    }
-    else if (cmd === 'giveaway') {
-        const prize = args[0], duration = parseInt(args[1]), winners = parseInt(args[2]);
-        if (!prize || !duration || !winners) return message.reply('Usage: `!giveaway <prize> <minutes> <winners>`');
-        const end = Date.now() + (duration * 60000);
-        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('🎉 GIVEAWAY 🎉')
-            .setDescription(`**Prize:** ${prize}\n**Winners:** ${winners}\n**Duration:** ${duration} minutes`).setFooter({ text: 'React with 🎉 to enter!' }).setTimestamp(end);
-        const msg = await channel.send({ embeds: [embed] });
-        await msg.react('🎉');
-        db.run(`INSERT INTO giveaways (message_id, channel_id, prize, winners, end_time) VALUES (?, ?, ?, ?, ?)`, [msg.id, channel.id, prize, winners, end]);
-        setTimeout(async () => {
-            const fetched = await msg.fetch().catch(() => null);
-            if (!fetched) return;
-            const reaction = fetched.reactions.cache.get('🎉');
-            let participants = reaction ? (await reaction.users.fetch()).filter(u => !u.bot) : [];
-            const selected = [];
-            for (let i = 0; i < Math.min(winners, participants.size); i++) {
-                const idx = Math.floor(Math.random() * participants.size);
-                selected.push([...participants][idx]);
-            }
-            const result = new EmbedBuilder().setColor(selected.length ? 0x22C55E : 0xEF4444).setTitle('🎉 GIVEAWAY ENDED 🎉')
-                .setDescription(`**Prize:** ${prize}\n**Winners:** ${selected.length ? selected.map(w => w.toString()).join(', ') : 'No winners'}`).setTimestamp();
-            await channel.send({ embeds: [result] });
-        }, duration * 60000);
-        await message.reply(`✅ Giveaway started for **${prize}**!`);
-    }
+
+    // TICKET SETUP
+    if (cmd === 'ticketsetup') { await setupTicket(message); return; }
+    if (cmd === 'ticket') { await sendTicketPanel(channel); return; }
+
+    // REACTION ROLES
+    if (cmd === 'roltest') { await setupRR(message); return; }
+
+    // VERIFICATION
+    if (cmd === 'verif') { await setupVerif(message); return; }
+    if (cmd === 'resetverif') { db.run(`DELETE FROM verification WHERE guild_id = ?`, [guild.id]); message.reply('✅ Vérification réinitialisée'); return; }
+    if (cmd === 'sendpanel') { const cfg = await getVerif(guild.id); if (!cfg) return message.reply('❌ Non configuré'); const ch = guild.channels.cache.get(cfg.channel); if (ch) await sendVerifPanel(ch); message.reply(`✅ Panel envoyé dans ${ch}`); return; }
+    if (cmd === 'verifstatus') { const cfg = await getVerif(guild.id); if (!cfg) return message.reply('❌ Non configuré'); const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('État de la vérification').addFields({ name: 'Rôle Auto', value: `<@&${cfg.auto_role}>`, inline: true }, { name: 'Rôle Vérifié', value: `<@&${cfg.verified_role}>`, inline: true }, { name: 'Salon', value: `<#${cfg.channel}>`, inline: true }); message.reply({ embeds: [embed] }); return; }
 });
 
 // ============================================
-// READY EVENT
+// READY
 // ============================================
-client.once('ready', async () => {
-    await loadSentGames();
-    console.log(`✅ ${client.user.tag} is online!`);
-    console.log(`📋 Prefix: !`);
+client.once('ready', () => {
+    console.log(`✅ ${client.user.tag} est en ligne!`);
+    console.log(`📋 Préfixe: !`);
     client.user.setActivity('!help | Premium Bot', { type: 3 });
 });
 
 // ============================================
-// SHUTDOWN HANDLER
+// SHUTDOWN
 // ============================================
-async function gracefulShutdown() {
-    console.log('🛑 Shutting down...');
-    await saveAllVoiceTime();
-    for (const interval of activeFreeGameSessions.values()) clearInterval(interval);
-    db.close(() => process.exit(0));
-}
-process.on('SIGINT', gracefulShutdown);
-process.on('SIGTERM', gracefulShutdown);
-process.on('unhandledRejection', (err) => console.error('❌ Error:', err.message));
-process.on('uncaughtException', (err) => console.error('❌ Error:', err.message));
+process.on('SIGINT', () => { db.close(() => process.exit(0)); });
+process.on('unhandledRejection', (err) => console.error('❌ Erreur:', err.message));
 
 client.login(BOT_TOKEN);
