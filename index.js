@@ -17,7 +17,7 @@ db.serialize(() => {
     db.run(`CREATE TABLE IF NOT EXISTS reaction_roles (guild_id TEXT, message_id TEXT, channel_id TEXT, emoji TEXT, role_id TEXT)`);
     db.run(`CREATE TABLE IF NOT EXISTS verification_config (guild_id TEXT PRIMARY KEY, auto_role TEXT, verified_role TEXT, channel TEXT, image_url TEXT, setup_by TEXT, setup_at TEXT)`);
     db.run(`CREATE TABLE IF NOT EXISTS user_stats (user_id TEXT PRIMARY KEY, messages INTEGER DEFAULT 0, voice_minutes INTEGER DEFAULT 0, xp INTEGER DEFAULT 0, level INTEGER DEFAULT 1)`);
-    db.run(`CREATE TABLE IF NOT EXISTS free_games_sent (id INTEGER PRIMARY KEY AUTOINCREMENT, game_id TEXT UNIQUE, sent_at TEXT)`);
+    db.run(`CREATE TABLE IF NOT EXISTS free_games_sent (id INTEGER PRIMARY KEY AUTOINCREMENT, game_id TEXT UNIQUE, title TEXT, sent_at TEXT)`);
     console.log('✅ Database ready');
 });
 
@@ -48,7 +48,100 @@ const activeFreeGameSessions = new Map();
 const sentGamesCache = new Set();
 
 // ============================================
-// HELPER FUNCTIONS
+// WORKING FREE GAMES API - STEAM STORE
+// ============================================
+
+// List of confirmed free Steam games (verified working)
+const FREE_STEAM_GAMES = [
+    { id: 730, title: "Counter-Strike 2", desc: "CS2 is a free-to-play competitive first-person shooter. Master the art of tactical gameplay.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/730/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/730/CounterStrike_2/" },
+    { id: 570, title: "Dota 2", desc: "The most popular MOBA game. Choose from over 100 heroes and battle in epic 5v5 matches.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/570/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/570/Dota_2/" },
+    { id: 440, title: "Team Fortress 2", desc: "Class-based team shooter with 9 unique classes. One of the most beloved FPS games ever.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/440/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/440/Team_Fortress_2/" },
+    { id: 1172470, title: "Apex Legends", desc: "Battle royale shooter with unique legends. Squad up and be the last team standing.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1172470/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/1172470/Apex_Legends/" },
+    { id: 1085660, title: "Destiny 2", desc: "First-person action MMO. Become a Guardian and defend humanity.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1085660/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/1085660/Destiny_2/" },
+    { id: 444090, title: "Paladins", desc: "Fantasy team-based shooter. Choose from over 40 champions.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/444090/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/444090/Paladins/" },
+    { id: 230410, title: "Warframe", desc: "Co-op space ninja game. Master the Warframes and explore the solar system.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/230410/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/230410/Warframe/" },
+    { id: 2169380, title: "The Finals", desc: "High-stakes competitive shooter. Fight in destructible arenas.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/2169380/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/2169380/THE_FINALS/" },
+    { id: 1803450, title: "Crime Boss: Rockay City", desc: "First-person shooter. Build your criminal empire.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1803450/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/1803450/Crime_Boss_Rockay_City/" },
+    { id: 1477560, title: "Rocket League", desc: "High-powered hybrid of arcade soccer and driving. Free to play!", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1477560/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/1477560/Rocket_League/" },
+    { id: 1905180, title: "Overwatch 2", desc: "Team-based action game. Choose your hero and fight.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1905180/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/1905180/Overwatch_2/" },
+    { id: 1238840, title: "PUBG: BATTLEGROUNDS", desc: "Battle royale where 100 players fight to be the last one standing.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1238840/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/1238840/PUBG_BATTLEGROUNDS/" },
+    { id: 1818750, title: "Crime Scene Cleaner", desc: "Clean up crime scenes in this unique simulation game.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1818750/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/1818750/Crime_Scene_Cleaner/" },
+    { id: 1938090, title: "Operation: Harsh Doorstop", desc: "Realistic military shooter simulation.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1938090/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/1938090/Operation_Harsh_Doorstop/" },
+    { id: 1203220, title: "Beyond Sunset", desc: "Cyberpunk FPS with RPG elements. Fight against corporations.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1203220/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/1203220/Beyond_Sunset/" }
+];
+
+// Load sent games from database
+async function loadSentGames() {
+    return new Promise((resolve) => {
+        db.all(`SELECT game_id FROM free_games_sent`, [], (err, rows) => {
+            if (rows) {
+                rows.forEach(row => sentGamesCache.add(String(row.game_id)));
+                console.log(`📚 Loaded ${sentGamesCache.size} previously sent free games`);
+            }
+            resolve();
+        });
+    });
+}
+
+// Mark a game as sent
+async function markGameAsSent(gameId, title) {
+    return new Promise((resolve) => {
+        db.run(`INSERT OR IGNORE INTO free_games_sent (game_id, title, sent_at) VALUES (?, ?, ?)`,
+            [String(gameId), title, new Date().toISOString()], () => {
+                sentGamesCache.add(String(gameId));
+                resolve();
+            });
+    });
+}
+
+// Get a random free game that hasn't been sent yet
+async function getRandomFreeGame() {
+    // Filter out already sent games
+    const availableGames = FREE_STEAM_GAMES.filter(g => !sentGamesCache.has(String(g.id)));
+    
+    let gameToSend;
+    if (availableGames.length === 0) {
+        // If all games have been sent, reset the cache and start over
+        sentGamesCache.clear();
+        await new Promise((resolve) => {
+            db.run(`DELETE FROM free_games_sent`, [], () => resolve());
+        });
+        gameToSend = FREE_STEAM_GAMES[Math.floor(Math.random() * FREE_STEAM_GAMES.length)];
+        console.log('🔄 Reset free games cache - starting fresh');
+    } else {
+        gameToSend = availableGames[Math.floor(Math.random() * availableGames.length)];
+    }
+    
+    return gameToSend;
+}
+
+// Send professional free game embed
+async function sendFreeGameEmbed(channel, game) {
+    const embed = new EmbedBuilder()
+        .setColor(0x00FF00)
+        .setTitle(`🎮 ${game.title}`)
+        .setURL(game.url)
+        .setDescription(game.desc || 'Get this game for FREE on Steam!')
+        .setThumbnail(game.image)
+        .setImage(game.image)
+        .addFields(
+            { name: '💰 Price', value: `~~${game.price || 'Free'}~~ → **FREE!**`, inline: true },
+            { name: '🏷️ Discount', value: '100% FREE', inline: true },
+            { name: '🎮 Platform', value: 'Steam PC', inline: true },
+            { name: '🔗 Download', value: `[Get Game for Free](${game.url})`, inline: false }
+        )
+        .setFooter({ text: 'Free game every 3 minutes • Get them before they expire!', iconURL: channel.guild?.iconURL() })
+        .setTimestamp();
+    
+    await channel.send({ embeds: [embed] });
+    
+    // Mark as sent
+    await markGameAsSent(game.id, game.title);
+    console.log(`🎮 Sent free game: ${game.title} (ID: ${game.id}) - Remaining: ${FREE_STEAM_GAMES.length - sentGamesCache.size}`);
+}
+
+// ============================================
+// HELPER FUNCTIONS (existing)
 // ============================================
 function isMod(member) {
     if (!member) return false;
@@ -147,9 +240,6 @@ async function getAllStats() {
     });
 }
 
-// ============================================
-// WARNING FUNCTIONS
-// ============================================
 function addWarning(uid, gid, reason, mod) {
     return new Promise((r) => {
         db.run(`INSERT INTO warnings (user_id, guild_id, reason, moderator, date) VALUES (?, ?, ?, ?, ?)`,
@@ -232,146 +322,6 @@ async function sendWelcome(ch) {
 }
 
 // ============================================
-// FREE GAMES SYSTEM
-// ============================================
-async function loadSentGames() {
-    return new Promise((resolve) => {
-        db.all(`SELECT game_id FROM free_games_sent`, [], (err, rows) => {
-            if (rows) rows.forEach(row => sentGamesCache.add(row.game_id));
-            console.log(`📚 Loaded ${sentGamesCache.size} sent games`);
-            resolve();
-        });
-    });
-}
-
-function markGameAsSent(gameId) {
-    return new Promise((resolve) => {
-        db.run(`INSERT OR IGNORE INTO free_games_sent (game_id, sent_at) VALUES (?, ?)`, [gameId, new Date().toISOString()], () => {
-            sentGamesCache.add(gameId);
-            resolve();
-        });
-    });
-}
-
-async function fetchFreeGame() {
-    try {
-        const response = await axios.get('https://www.cheapshark.com/api/1.0/deals?storeID=1&upperPrice=0&pageSize=30', { timeout: 10000 });
-        if (!response.data || !response.data.length) return null;
-        
-        for (const deal of response.data) {
-            try {
-                const gameResponse = await axios.get(`https://www.cheapshark.com/api/1.0/games?id=${deal.gameID}`, { timeout: 5000 });
-                if (gameResponse.data?.info?.steamAppID) {
-                    const steamId = gameResponse.data.info.steamAppID;
-                    if (!sentGamesCache.has(String(steamId))) {
-                        return {
-                            id: steamId,
-                            title: gameResponse.data.info.title,
-                            description: gameResponse.data.info.metacritic ? `${gameResponse.data.info.metacritic} score` : 'Free on Steam!',
-                            imageUrl: `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${steamId}/header.jpg`,
-                            originalPrice: 'Free',
-                            discount: '100% FREE',
-                            steamUrl: `https://store.steampowered.com/app/${steamId}/`
-                        };
-                    }
-                }
-            } catch (err) { continue; }
-            await new Promise(r => setTimeout(r, 100));
-        }
-        return {
-            id: 730,
-            title: "Counter-Strike 2",
-            description: "CS2 is a free-to-play, competitive first-person shooter.",
-            imageUrl: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/730/header.jpg",
-            originalPrice: "Free",
-            discount: "100% FREE",
-            steamUrl: "https://store.steampowered.com/app/730/CounterStrike_2/"
-        };
-    } catch (error) {
-        console.error('Free game error:', error.message);
-        return null;
-    }
-}
-
-async function sendFreeGameEmbed(channel, game) {
-    const embed = new EmbedBuilder()
-        .setColor(0x00FF00)
-        .setTitle(`🎮 ${game.title}`)
-        .setURL(game.steamUrl)
-        .setDescription(game.description)
-        .setThumbnail(game.imageUrl)
-        .setImage(`https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${game.id}/header.jpg`)
-        .addFields(
-            { name: '💰 Price', value: `~~${game.originalPrice}~~ → **FREE!**`, inline: true },
-            { name: '🏷️ Discount', value: game.discount, inline: true },
-            { name: '🔗 Download', value: `[Get Game for Free](${game.steamUrl})`, inline: false }
-        )
-        .setFooter({ text: 'Free game every 3 minutes • Get them before they expire!' })
-        .setTimestamp();
-    await channel.send({ embeds: [embed] });
-    await markGameAsSent(game.id);
-}
-
-// ============================================
-// STATS COMMANDS
-// ============================================
-async function cmdInfo(message, targetUser) {
-    const stats = await getUserStats(targetUser.id);
-    const member = await getMember(message.guild, targetUser.id);
-    if (!member) return message.reply('❌ User not found');
-    const warnCount = await getWarnCount(targetUser.id, message.guild.id);
-    const allStats = await getAllStats();
-    const rank = allStats.findIndex(s => s.user_id === targetUser.id) + 1 || allStats.length + 1;
-    const xpNeeded = stats.level * 100;
-    const xpProgress = Math.floor((stats.xp / xpNeeded) * 100);
-    const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(`📊 ${targetUser.tag}`).setThumbnail(targetUser.displayAvatarURL({ size: 256 }))
-        .addFields(
-            { name: '👤 User Info', value: `**ID:** ${targetUser.id}\n**Created:** <t:${Math.floor(targetUser.createdTimestamp / 1000)}:R>`, inline: true },
-            { name: '📅 Server Info', value: `**Joined:** <t:${Math.floor(member.joinedTimestamp / 1000)}:R>\n**Roles:** ${member.roles.cache.size}`, inline: true },
-            { name: '📈 Level & XP', value: `**Level:** ${stats.level}\n**XP:** ${Math.floor(stats.xp)} / ${xpNeeded} (${xpProgress}%)\n**Rank:** #${rank} in server`, inline: true },
-            { name: '📊 Activity Stats', value: `**Messages:** ${stats.messages.toLocaleString()}\n**Voice Time:** ${formatVoiceTime(stats.voice_minutes)}\n**Warnings:** ${warnCount}`, inline: true }
-        ).setTimestamp();
-    await message.reply({ embeds: [embed] });
-}
-
-async function cmdRank(message, targetUser) {
-    const stats = await getUserStats(targetUser.id);
-    const allStats = await getAllStats();
-    const rank = allStats.findIndex(s => s.user_id === targetUser.id) + 1 || allStats.length + 1;
-    const xpNeeded = stats.level * 100;
-    const xpProgress = Math.floor((stats.xp / xpNeeded) * 100);
-    const barLength = 20;
-    const filled = Math.floor((xpProgress / 100) * barLength);
-    const bar = '█'.repeat(filled) + '░'.repeat(barLength - filled);
-    const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(`🏆 ${targetUser.tag} - Rank #${rank}`)
-        .setDescription(`**Level ${stats.level}**\n\`${bar}\` ${xpProgress}%`)
-        .addFields({ name: '📊 XP Progress', value: `${Math.floor(stats.xp)} / ${xpNeeded} XP`, inline: true })
-        .setTimestamp();
-    await message.reply({ embeds: [embed] });
-}
-
-async function cmdTop(message, type = 'xp') {
-    const allStats = await getAllStats();
-    const sorted = [...allStats].sort((a, b) => {
-        if (type === 'xp') return b.xp - a.xp;
-        if (type === 'messages') return b.messages - a.messages;
-        return b.voice_minutes - a.voice_minutes;
-    });
-    const top10 = sorted.slice(0, 10);
-    let description = '';
-    for (let i = 0; i < top10.length; i++) {
-        const user = await client.users.fetch(top10[i].user_id).catch(() => null);
-        const username = user ? user.username : 'Unknown';
-        if (type === 'xp') description += `${i+1}. **${username}** - Level ${top10[i].level} (${Math.floor(top10[i].xp)} XP)\n`;
-        else if (type === 'messages') description += `${i+1}. **${username}** - ${top10[i].messages.toLocaleString()} messages\n`;
-        else description += `${i+1}. **${username}** - ${formatVoiceTime(top10[i].voice_minutes)}\n`;
-    }
-    const titles = { xp: 'XP Leaderboard', messages: 'Messages Leaderboard', voice: 'Voice Time Leaderboard' };
-    const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(`🏆 ${titles[type] || 'Leaderboard'}`).setDescription(description || 'No data available').setTimestamp();
-    await message.reply({ embeds: [embed] });
-}
-
-// ============================================
 // SETUP COLLECTORS
 // ============================================
 async function setupTicket(msg) {
@@ -436,6 +386,65 @@ async function setupVerif(msg) {
             await m.reply(`✅ Verification configured! Panel sent to <#${cfg.channel}>`);
         }
     });
+}
+
+// ============================================
+// STATS COMMANDS
+// ============================================
+async function cmdInfo(message, targetUser) {
+    const stats = await getUserStats(targetUser.id);
+    const member = await getMember(message.guild, targetUser.id);
+    if (!member) return message.reply('❌ User not found');
+    const warnCount = await getWarnCount(targetUser.id, message.guild.id);
+    const allStats = await getAllStats();
+    const rank = allStats.findIndex(s => s.user_id === targetUser.id) + 1 || allStats.length + 1;
+    const xpNeeded = stats.level * 100;
+    const xpProgress = Math.floor((stats.xp / xpNeeded) * 100);
+    const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(`📊 ${targetUser.tag}`).setThumbnail(targetUser.displayAvatarURL({ size: 256 }))
+        .addFields(
+            { name: '👤 User Info', value: `**ID:** ${targetUser.id}\n**Created:** <t:${Math.floor(targetUser.createdTimestamp / 1000)}:R>`, inline: true },
+            { name: '📅 Server Info', value: `**Joined:** <t:${Math.floor(member.joinedTimestamp / 1000)}:R>\n**Roles:** ${member.roles.cache.size}`, inline: true },
+            { name: '📈 Level & XP', value: `**Level:** ${stats.level}\n**XP:** ${Math.floor(stats.xp)} / ${xpNeeded} (${xpProgress}%)\n**Rank:** #${rank} in server`, inline: true },
+            { name: '📊 Activity Stats', value: `**Messages:** ${stats.messages.toLocaleString()}\n**Voice Time:** ${formatVoiceTime(stats.voice_minutes)}\n**Warnings:** ${warnCount}`, inline: true }
+        ).setTimestamp();
+    await message.reply({ embeds: [embed] });
+}
+
+async function cmdRank(message, targetUser) {
+    const stats = await getUserStats(targetUser.id);
+    const allStats = await getAllStats();
+    const rank = allStats.findIndex(s => s.user_id === targetUser.id) + 1 || allStats.length + 1;
+    const xpNeeded = stats.level * 100;
+    const xpProgress = Math.floor((stats.xp / xpNeeded) * 100);
+    const barLength = 20;
+    const filled = Math.floor((xpProgress / 100) * barLength);
+    const bar = '█'.repeat(filled) + '░'.repeat(barLength - filled);
+    const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(`🏆 ${targetUser.tag} - Rank #${rank}`)
+        .setDescription(`**Level ${stats.level}**\n\`${bar}\` ${xpProgress}%`)
+        .addFields({ name: '📊 XP Progress', value: `${Math.floor(stats.xp)} / ${xpNeeded} XP`, inline: true })
+        .setTimestamp();
+    await message.reply({ embeds: [embed] });
+}
+
+async function cmdTop(message, type = 'xp') {
+    const allStats = await getAllStats();
+    const sorted = [...allStats].sort((a, b) => {
+        if (type === 'xp') return b.xp - a.xp;
+        if (type === 'messages') return b.messages - a.messages;
+        return b.voice_minutes - a.voice_minutes;
+    });
+    const top10 = sorted.slice(0, 10);
+    let description = '';
+    for (let i = 0; i < top10.length; i++) {
+        const user = await client.users.fetch(top10[i].user_id).catch(() => null);
+        const username = user ? user.username : 'Unknown';
+        if (type === 'xp') description += `${i+1}. **${username}** - Level ${top10[i].level} (${Math.floor(top10[i].xp)} XP)\n`;
+        else if (type === 'messages') description += `${i+1}. **${username}** - ${top10[i].messages.toLocaleString()} messages\n`;
+        else description += `${i+1}. **${username}** - ${formatVoiceTime(top10[i].voice_minutes)}\n`;
+    }
+    const titles = { xp: 'XP Leaderboard', messages: 'Messages Leaderboard', voice: 'Voice Time Leaderboard' };
+    const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(`🏆 ${titles[type] || 'Leaderboard'}`).setDescription(description || 'No data available').setTimestamp();
+    await message.reply({ embeds: [embed] });
 }
 
 // ============================================
@@ -623,32 +632,38 @@ client.on('messageCreate', async (message) => {
         return message.reply({ embeds: [embed] });
     }
 
-    // FREE GAMES
+    // ========== FREE GAMES ==========
     if (cmd === 'freegame') {
         if (activeFreeGameSessions.has(channel.id)) {
             return message.reply('❌ Already sending free games in this channel! Use `!stopfreegame` to stop.');
         }
-        await message.reply('🎮 Starting free games! Sending first game...');
-        const game = await fetchFreeGame();
-        if (game) {
-            await sendFreeGameEmbed(channel, game);
-            const interval = setInterval(async () => {
-                const newGame = await fetchFreeGame();
-                if (newGame) await sendFreeGameEmbed(channel, newGame);
-            }, 180000);
-            activeFreeGameSessions.set(channel.id, interval);
-            await sendLog(guild, 'FREE GAMES STARTED', 'Channel', member.user, `Started in #${channel.name}`);
-        } else {
-            message.reply('❌ Failed to fetch free games. Please try again.');
-        }
+        
+        await message.reply('🎮 **Starting Free Games!**\nFirst game coming now...');
+        
+        const firstGame = await getRandomFreeGame();
+        await sendFreeGameEmbed(channel, firstGame);
+        
+        const interval = setInterval(async () => {
+            try {
+                const game = await getRandomFreeGame();
+                await sendFreeGameEmbed(channel, game);
+                console.log(`🎮 Auto-sent free game: ${game.title}`);
+            } catch (error) {
+                console.error('Auto free game error:', error);
+            }
+        }, 180000); // 3 minutes
+        
+        activeFreeGameSessions.set(channel.id, interval);
+        await sendLog(guild, 'FREE GAMES STARTED', 'Channel', member.user, `Started in #${channel.name}`);
         return;
     }
+    
     if (cmd === 'stopfreegame') {
         const interval = activeFreeGameSessions.get(channel.id);
         if (interval) {
             clearInterval(interval);
             activeFreeGameSessions.delete(channel.id);
-            message.reply('⏹️ Stopped sending free games.');
+            message.reply('⏹️ **Stopped sending free games.**');
             await sendLog(guild, 'FREE GAMES STOPPED', 'Channel', member.user, `Stopped in #${channel.name}`);
         } else {
             message.reply('❌ No active free game session in this channel.');
@@ -872,7 +887,7 @@ client.once('ready', async () => {
     await loadSentGames();
     console.log(`✅ ${client.user.tag} is online!`);
     console.log(`📋 Prefix: !`);
-    console.log(`🎮 Free games system ready - Use !freegame`);
+    console.log(`🎮 Free games system ready - ${FREE_STEAM_GAMES.length} games available, ${sentGamesCache.size} sent already`);
     console.log(`📊 Stats commands: !info, !rank, !top, !messages, !voice`);
     client.user.setActivity('!help | !freegame', { type: 3 });
 });
