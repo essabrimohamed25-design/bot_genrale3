@@ -24,8 +24,10 @@ db.serialize(() => {
 // ============================================
 // CONFIG
 // ============================================
-const { BOT_TOKEN, LOG_CHANNEL_ID, MOD_ROLE_ID, AUTO_ROLE_ID, WELCOME_IMAGE_URL } = process.env;
+const { BOT_TOKEN, LOG_CHANNEL_ID, MOD_ROLE_ID, AUTO_ROLE_ID } = process.env;
 if (!BOT_TOKEN) { console.error('❌ Missing BOT_TOKEN'); process.exit(1); }
+
+const WELCOME_CHANNEL_ID = '1496836534815686836';
 
 const client = new Client({
     intents: [
@@ -508,37 +510,19 @@ async function saveAllVoiceTime() {
     }
 }
 
-// ========== ORIGINAL WELCOME MESSAGE (EXACTLY AS BEFORE) ==========
-const WELCOME_CHANNEL_ID = '1496836534815686836';
-
+// ========== CLEAN & SHORT WELCOME MESSAGE ==========
 async function sendWelcome(member) {
     const channel = member.guild.channels.cache.get(WELCOME_CHANNEL_ID);
     if (!channel) return;
     
     const embed = new EmbedBuilder()
         .setColor(0x5865F2)
-        .setTitle(`🌟 WELCOME TO ${member.guild.name.toUpperCase()} 🌟`)
-        .setDescription(`> **Thank you for joining our community!**\n> We're excited to have you here.\n`)
+        .setTitle(`🎉 WELCOME TO ${member.guild.name.toUpperCase()} 🎉`)
+        .setDescription(`Hey ${member.toString()}! Welcome to the community! ✨\n\nWe're glad to have you here. Feel free to explore and have fun! 🚀`)
         .setThumbnail(member.user.displayAvatarURL({ size: 1024, dynamic: true }))
-        .setImage('https://media.discordapp.net/attachments/1462437612647088335/1482006389843824670/content.png')
-        .addFields(
-            { name: '━━━━━━━━━━━━━━━━━━━━━━━━━━━━', value: ' ', inline: false },
-            { name: '📢 │ ANNOUNCEMENTS', value: '> Stay updated with server news and events', inline: false },
-            { name: '━━━━━━━━━━━━━━━━━━━━━━━━━━━━', value: ' ', inline: false },
-            { name: '📜 │ RULES', value: '> Please read our rules to keep the community safe', inline: false },
-            { name: '━━━━━━━━━━━━━━━━━━━━━━━━━━━━', value: ' ', inline: false },
-            { name: '🎭 │ SELF ROLES', value: '> Get your roles using !roltest', inline: false },
-            { name: '━━━━━━━━━━━━━━━━━━━━━━━━━━━━', value: ' ', inline: false },
-            { name: '📋 │ APPLY TEAM', value: '> Interested in joining our team? Use !ticket', inline: false },
-            { name: '━━━━━━━━━━━━━━━━━━━━━━━━━━━━', value: ' ', inline: false },
-            { name: '💬 │ GENERAL', value: '> Chat with the community', inline: false },
-            { name: '━━━━━━━━━━━━━━━━━━━━━━━━━━━━', value: ' ', inline: false },
-            { name: '🔧 │ COMMANDS', value: '> Use !help to see all commands\n> Use !suggest to share ideas\n> Use !ticket for support', inline: false },
-            { name: '━━━━━━━━━━━━━━━━━━━━━━━━━━━━', value: ' ', inline: false },
-            { name: '🎤 │ VOICE', value: '> Connect with members in voice channels', inline: false }
-        )
+        .setImage('https://media.discordapp.net/attachments/1480969775344652470/1496647172148559983/BBCD65E5-E8A2-47BB-80A0-0A208431F3A6.png')
         .setTimestamp()
-        .setFooter({ text: `${member.guild.name} • Welcome!`, iconURL: member.guild.iconURL() });
+        .setFooter({ text: member.guild.name, iconURL: member.guild.iconURL() });
     
     await channel.send({ content: `${member.toString()}`, embeds: [embed] });
 }
@@ -549,8 +533,8 @@ client.on('guildMemberAdd', async (member) => {
     
     const logChannel = member.guild.channels.cache.get(LOG_CHANNEL_ID);
     if (logChannel) {
-        const embed = new EmbedBuilder().setColor(0x22C55E).setTitle('👋 Member Joined').setDescription(`${member.user.tag} joined`).setThumbnail(member.user.displayAvatarURL()).setTimestamp();
-        await logChannel.send({ embeds: [embed] });
+        const logEmbed = new EmbedBuilder().setColor(0x22C55E).setTitle('👋 Member Joined').setDescription(`${member.user.tag} joined`).setThumbnail(member.user.displayAvatarURL()).setTimestamp();
+        await logChannel.send({ embeds: [logEmbed] });
     }
     
     const vcfg = await getVerif(member.guild.id);
