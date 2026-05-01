@@ -1,7 +1,7 @@
 {
   "name": "discord-moderation-bot",
   "version": "1.0.0",
-  "description": "Complete Discord moderation bot with free games, stats, tickets, verification",
+  "description": "Complete Discord moderation bot with premium features",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
