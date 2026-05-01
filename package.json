@@ -1,7 +1,7 @@
 {
   "name": "discord-moderation-bot",
   "version": "1.0.0",
-  "description": "Complete Discord moderation bot with verification, tickets, reaction roles",
+  "description": "Complete Discord moderation bot with verification, tickets, reaction roles, and free games",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -9,7 +9,8 @@
   "dependencies": {
     "discord.js": "^14.14.1",
     "dotenv": "^16.3.1",
-    "sqlite3": "^5.1.6"
+    "sqlite3": "^5.1.6",
+    "axios": "^1.6.2"
   },
   "engines": {
     "node": ">=18.0.0"
