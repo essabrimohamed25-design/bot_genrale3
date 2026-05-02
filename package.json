@@ -1,14 +1,12 @@
 {
   "name": "discord-moderation-bot",
   "version": "1.0.0",
-  "description": "Complete Discord moderation bot",
-  "main": "bot.js",
+  "main": "index.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node index.js"
   },
   "dependencies": {
     "@discordjs/voice": "^0.16.0",
-    "axios": "^1.6.0",
     "discord.js": "^14.14.1",
     "dotenv": "^16.3.1",
     "sqlite3": "^5.1.6"
