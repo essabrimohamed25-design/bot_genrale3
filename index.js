@@ -1,6 +1,7 @@
 const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const { joinVoiceChannel, getVoiceConnection, VoiceConnectionStatus, entersState } = require('@discordjs/voice');
 const sqlite3 = require('sqlite3').verbose();
+const axios = require('axios');
 require('dotenv').config();
 
 // ============================================
@@ -9,7 +10,6 @@ require('dotenv').config();
 const db = new sqlite3.Database('./bot_data.db');
 
 db.serialize(() => {
-    // Main tables
     db.run(`CREATE TABLE IF NOT EXISTS warnings (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, guild_id TEXT, reason TEXT, moderator TEXT, date TEXT)`);
     db.run(`CREATE TABLE IF NOT EXISTS suggestions (id INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT, user_id TEXT, suggestion TEXT, date TEXT)`);
     db.run(`CREATE TABLE IF NOT EXISTS giveaways (id INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT, channel_id TEXT, prize TEXT, winners INTEGER, end_time INTEGER)`);
@@ -25,14 +25,7 @@ db.serialize(() => {
 // ============================================
 // CONFIG
 // ============================================
-const { 
-    BOT_TOKEN, 
-    LOG_CHANNEL_ID, 
-    MOD_ROLE_ID, 
-    AUTO_ROLE_ID, 
-    VOICE_CHANNEL_ID,
-    WELCOME_CHANNEL_ID 
-} = process.env;
+const { BOT_TOKEN, LOG_CHANNEL_ID, MOD_ROLE_ID, AUTO_ROLE_ID, VOICE_CHANNEL_ID, WELCOME_CHANNEL_ID } = process.env;
 
 if (!BOT_TOKEN) {
     console.error('❌ Missing BOT_TOKEN');
