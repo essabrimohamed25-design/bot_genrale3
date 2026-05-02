@@ -1,4 +1,5 @@
 const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { joinVoiceChannel, getVoiceConnection } = require('@discordjs/voice');
 const sqlite3 = require('sqlite3').verbose();
 const axios = require('axios');
 require('dotenv').config();
@@ -24,7 +25,7 @@ db.serialize(() => {
 // ============================================
 // CONFIG
 // ============================================
-const { BOT_TOKEN, LOG_CHANNEL_ID, MOD_ROLE_ID, AUTO_ROLE_ID } = process.env;
+const { BOT_TOKEN, LOG_CHANNEL_ID, MOD_ROLE_ID, AUTO_ROLE_ID, VOICE_CHANNEL_ID } = process.env;
 if (!BOT_TOKEN) { console.error('❌ Missing BOT_TOKEN'); process.exit(1); }
 
 const WELCOME_CHANNEL_ID = '1496836534815686836';
@@ -110,6 +111,64 @@ async function sendFreeGameEmbed(channel, game) {
         .setTimestamp();
     await channel.send({ embeds: [embed] });
     await markGameAsSent(game.id);
+}
+
+// ============================================
+// VOICE CHANNEL AUTO-JOIN
+// ============================================
+async function autoJoinVoiceChannel() {
+    if (!VOICE_CHANNEL_ID) {
+        console.log('⚠️ No VOICE_CHANNEL_ID configured');
+        return;
+    }
+
+    try {
+        const guild = client.guilds.cache.first();
+        if (!guild) {
+            console.log('⚠️ No guild found, waiting...');
+            return;
+        }
+
+        const voiceChannel = guild.channels.cache.get(VOICE_CHANNEL_ID);
+        if (!voiceChannel) {
+            console.log(`⚠️ Voice channel ${VOICE_CHANNEL_ID} not found!`);
+            return;
+        }
+
+        if (voiceChannel.type !== ChannelType.GuildVoice) {
+            console.log(`⚠️ ${VOICE_CHANNEL_ID} is not a voice channel!`);
+            return;
+        }
+
+        const existingConnection = getVoiceConnection(guild.id);
+        if (existingConnection) {
+            console.log('✅ Already connected to a voice channel');
+            return;
+        }
+
+        const connection = joinVoiceChannel({
+            channelId: VOICE_CHANNEL_ID,
+            guildId: guild.id,
+            adapterCreator: guild.voiceAdapterCreator,
+            selfDeaf: false,
+            selfMute: false
+        });
+
+        console.log(`🎤 Successfully joined voice channel: ${voiceChannel.name}`);
+        
+        connection.on('disconnect', () => {
+            console.log('🔌 Disconnected, reconnecting in 5 seconds...');
+            setTimeout(() => autoJoinVoiceChannel(), 5000);
+        });
+
+        connection.on('error', (error) => {
+            console.error('❌ Voice connection error:', error.message);
+        });
+
+    } catch (error) {
+        console.error(`❌ Failed to join voice channel: ${error.message}`);
+        setTimeout(() => autoJoinVoiceChannel(), 10000);
+    }
 }
 
 // ============================================
@@ -876,6 +935,9 @@ client.once('ready', async () => {
     console.log(`🎮 Free games ready`);
     console.log(`📢 Welcome channel: ${WELCOME_CHANNEL_ID}`);
     client.user.setActivity('!help', { type: 3 });
+    
+    // Auto-join voice channel on startup
+    setTimeout(() => autoJoinVoiceChannel(), 3000);
 });
 
 // ============================================
