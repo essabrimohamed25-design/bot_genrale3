@@ -1,7 +1,6 @@
 const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-const { joinVoiceChannel, getVoiceConnection } = require('@discordjs/voice');
+const { joinVoiceChannel, getVoiceConnection, VoiceConnectionStatus, entersState } = require('@discordjs/voice');
 const sqlite3 = require('sqlite3').verbose();
-const axios = require('axios');
 require('dotenv').config();
 
 // ============================================
@@ -10,6 +9,7 @@ require('dotenv').config();
 const db = new sqlite3.Database('./bot_data.db');
 
 db.serialize(() => {
+    // Main tables
     db.run(`CREATE TABLE IF NOT EXISTS warnings (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, guild_id TEXT, reason TEXT, moderator TEXT, date TEXT)`);
     db.run(`CREATE TABLE IF NOT EXISTS suggestions (id INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT, user_id TEXT, suggestion TEXT, date TEXT)`);
     db.run(`CREATE TABLE IF NOT EXISTS giveaways (id INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT, channel_id TEXT, prize TEXT, winners INTEGER, end_time INTEGER)`);
@@ -25,10 +25,19 @@ db.serialize(() => {
 // ============================================
 // CONFIG
 // ============================================
-const { BOT_TOKEN, LOG_CHANNEL_ID, MOD_ROLE_ID, AUTO_ROLE_ID, VOICE_CHANNEL_ID } = process.env;
-if (!BOT_TOKEN) { console.error('❌ Missing BOT_TOKEN'); process.exit(1); }
+const { 
+    BOT_TOKEN, 
+    LOG_CHANNEL_ID, 
+    MOD_ROLE_ID, 
+    AUTO_ROLE_ID, 
+    VOICE_CHANNEL_ID,
+    WELCOME_CHANNEL_ID 
+} = process.env;
 
-const WELCOME_CHANNEL_ID = '1496836534815686836';
+if (!BOT_TOKEN) {
+    console.error('❌ Missing BOT_TOKEN');
+    process.exit(1);
+}
 
 const client = new Client({
     intents: [
@@ -116,34 +125,42 @@ async function sendFreeGameEmbed(channel, game) {
 // ============================================
 // VOICE CHANNEL AUTO-JOIN
 // ============================================
-async function autoJoinVoiceChannel() {
+let currentVoiceConnection = null;
+let reconnectTimeout = null;
+
+async function joinVoiceChannelProper() {
     if (!VOICE_CHANNEL_ID) {
-        console.log('⚠️ No VOICE_CHANNEL_ID configured');
+        console.log('⚠️ No VOICE_CHANNEL_ID configured, skipping voice join');
         return;
     }
 
     try {
         const guild = client.guilds.cache.first();
         if (!guild) {
-            console.log('⚠️ No guild found, waiting...');
+            console.log('⚠️ No guild found, waiting for ready event');
             return;
         }
 
         const voiceChannel = guild.channels.cache.get(VOICE_CHANNEL_ID);
         if (!voiceChannel) {
-            console.log(`⚠️ Voice channel ${VOICE_CHANNEL_ID} not found!`);
+            console.log(`⚠️ Voice channel ${VOICE_CHANNEL_ID} not found`);
             return;
         }
 
         if (voiceChannel.type !== ChannelType.GuildVoice) {
-            console.log(`⚠️ ${VOICE_CHANNEL_ID} is not a voice channel!`);
+            console.log(`⚠️ Channel ${VOICE_CHANNEL_ID} is not a voice channel`);
             return;
         }
 
         const existingConnection = getVoiceConnection(guild.id);
-        if (existingConnection) {
-            console.log('✅ Already connected to a voice channel');
+        if (existingConnection && existingConnection.joinConfig.channelId === VOICE_CHANNEL_ID) {
+            console.log(`✅ Already connected to voice channel: ${voiceChannel.name}`);
             return;
+        }
+
+        if (existingConnection) {
+            existingConnection.destroy();
+            console.log('🔌 Destroyed existing voice connection');
         }
 
         const connection = joinVoiceChannel({
@@ -154,22 +171,87 @@ async function autoJoinVoiceChannel() {
             selfMute: false
         });
 
-        console.log(`🎤 Successfully joined voice channel: ${voiceChannel.name}`);
-        
-        connection.on('disconnect', () => {
-            console.log('🔌 Disconnected, reconnecting in 5 seconds...');
-            setTimeout(() => autoJoinVoiceChannel(), 5000);
+        currentVoiceConnection = connection;
+
+        connection.on(VoiceConnectionStatus.Ready, () => {
+            console.log(`🎤 Successfully joined voice channel: ${voiceChannel.name} (${VOICE_CHANNEL_ID})`);
+            if (reconnectTimeout) {
+                clearTimeout(reconnectTimeout);
+                reconnectTimeout = null;
+            }
+        });
+
+        connection.on(VoiceConnectionStatus.Disconnected, async () => {
+            console.log(`⚠️ Disconnected from voice channel, attempting to reconnect...`);
+            try {
+                await entersState(connection, VoiceConnectionStatus.Signalling, 5_000);
+                console.log('🔄 Reconnecting to voice channel...');
+            } catch (error) {
+                console.log('❌ Failed to reconnect, destroying connection...');
+                connection.destroy();
+                currentVoiceConnection = null;
+                if (!reconnectTimeout) {
+                    reconnectTimeout = setTimeout(() => {
+                        reconnectTimeout = null;
+                        joinVoiceChannelProper();
+                    }, 10000);
+                }
+            }
+        });
+
+        connection.on(VoiceConnectionStatus.Destroyed, () => {
+            console.log('🔌 Voice connection destroyed');
+            currentVoiceConnection = null;
+            if (!reconnectTimeout) {
+                reconnectTimeout = setTimeout(() => {
+                    reconnectTimeout = null;
+                    joinVoiceChannelProper();
+                }, 10000);
+            }
         });
 
         connection.on('error', (error) => {
             console.error('❌ Voice connection error:', error.message);
         });
 
+        await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
+        
     } catch (error) {
         console.error(`❌ Failed to join voice channel: ${error.message}`);
-        setTimeout(() => autoJoinVoiceChannel(), 10000);
+        if (!reconnectTimeout) {
+            reconnectTimeout = setTimeout(() => {
+                reconnectTimeout = null;
+                joinVoiceChannelProper();
+            }, 30000);
+        }
     }
 }
+
+// Periodic check to ensure bot stays connected
+setInterval(async () => {
+    try {
+        const guild = client.guilds.cache.first();
+        if (!guild || !client.isReady()) return;
+
+        const connection = getVoiceConnection(guild.id);
+        
+        if (!connection && VOICE_CHANNEL_ID) {
+            console.log('🔍 No voice connection found, reconnecting...');
+            await joinVoiceChannelProper();
+        }
+        
+        if (connection && connection.state.status === VoiceConnectionStatus.Disconnected) {
+            console.log('🔍 Connection in disconnected state, attempting to recover...');
+            try {
+                await entersState(connection, VoiceConnectionStatus.Signalling, 5_000);
+            } catch (error) {
+                connection.destroy();
+                currentVoiceConnection = null;
+                await joinVoiceChannelProper();
+            }
+        }
+    } catch (error) {}
+}, 30000);
 
 // ============================================
 // HELPERS
@@ -569,7 +651,7 @@ async function saveAllVoiceTime() {
     }
 }
 
-// ========== CLEAN & SHORT WELCOME MESSAGE ==========
+// ========== WELCOME MESSAGE ==========
 async function sendWelcome(member) {
     const channel = member.guild.channels.cache.get(WELCOME_CHANNEL_ID);
     if (!channel) return;
@@ -933,11 +1015,12 @@ client.once('ready', async () => {
     console.log(`✅ ${client.user.tag} online!`);
     console.log(`📋 Prefix: !`);
     console.log(`🎮 Free games ready`);
-    console.log(`📢 Welcome channel: ${WELCOME_CHANNEL_ID}`);
+    console.log(`📢 Welcome channel: ${WELCOME_CHANNEL_ID || 'Not set'}`);
+    console.log(`🎤 Voice channel: ${VOICE_CHANNEL_ID || 'Not set'}`);
     client.user.setActivity('!help', { type: 3 });
     
     // Auto-join voice channel on startup
-    setTimeout(() => autoJoinVoiceChannel(), 3000);
+    setTimeout(() => joinVoiceChannelProper(), 3000);
 });
 
 // ============================================
@@ -946,6 +1029,7 @@ client.once('ready', async () => {
 async function gracefulShutdown() {
     await saveAllVoiceTime();
     for (const interval of activeFreeGameSessions.values()) clearInterval(interval);
+    if (currentVoiceConnection) currentVoiceConnection.destroy();
     db.close(() => process.exit(0));
 }
 process.on('SIGINT', gracefulShutdown);
