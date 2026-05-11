@@ -47,10 +47,10 @@ const client = new Client({
 // ============================================
 // STORAGE
 // ============================================
-const spamMap = new Map();
 const voiceStartTimes = new Map();
 const activeFreeGameSessions = new Map();
 const sentGamesCache = new Set();
+const linkWarnCooldown = new Map(); // Anti-link cooldown
 
 // ============================================
 // FREE GAMES LIST
@@ -220,7 +220,6 @@ async function joinVoiceChannelProper() {
     }
 }
 
-// Periodic check to ensure bot stays connected
 setInterval(async () => {
     try {
         const guild = client.guilds.cache.first();
@@ -483,6 +482,100 @@ async function setupVerif(msg) {
 }
 
 // ============================================
+// ANTI-LINK SYSTEM (COMPLETE REWRITE)
+// ============================================
+
+// Comprehensive link detection regex
+const LINK_REGEX = /(https?:\/\/[^\s]+|www\.[^\s]+|discord\.gg\/[^\s]+|discord\.com\/invite\/[^\s]+|dsc\.gg\/[^\s]+|[\w-]+\.(com|net|org|io|gg|xyz|me|us|uk|ca|au|de|fr|jp|cn|ru|br|in|eu|tv|app|site|online|live|club|shop|store|tech|xyz|top|ml|tk|cf|ga|gq)[\/\s]?)/i;
+
+// Anti-link handler
+client.on('messageCreate', async (message) => {
+    // Skip bots, DMs, webhooks, and command messages
+    if (message.author?.bot || !message.guild || message.webhookId) return;
+    if (message.content.startsWith('!')) return;
+    
+    // Skip if user is moderator
+    if (isMod(message.member)) return;
+    
+    // Check for links
+    if (LINK_REGEX.test(message.content)) {
+        // Delete the message
+        try {
+            await message.delete();
+            console.log(`[ANTI-LINK] Deleted message from ${message.author.tag}`);
+        } catch (err) {
+            console.error(`[ANTI-LINK] Failed to delete: ${err.message}`);
+        }
+        
+        // Check cooldown to avoid spamming
+        const now = Date.now();
+        const lastWarn = linkWarnCooldown.get(message.author.id);
+        
+        if (!lastWarn || now - lastWarn > 10000) {
+            linkWarnCooldown.set(message.author.id, now);
+            setTimeout(() => linkWarnCooldown.delete(message.author.id), 10000);
+            
+            // Send warning
+            try {
+                const warnMsg = await message.channel.send(`${message.author} ry7 t9wd mra jaya`);
+                setTimeout(() => warnMsg.delete().catch(() => {}), 3000);
+            } catch (err) {
+                console.error(`[ANTI-LINK] Failed to send warning: ${err.message}`);
+            }
+        }
+        
+        // Timeout the user (1 minute)
+        try {
+            await message.member.timeout(60000, `Sent a link: ${message.content.substring(0, 100)}`);
+            console.log(`[ANTI-LINK] Timed out ${message.author.tag}`);
+            
+            // Log to channel
+            if (LOG_CHANNEL_ID) {
+                const logChannel = message.guild.channels.cache.get(LOG_CHANNEL_ID);
+                if (logChannel) {
+                    const embed = new EmbedBuilder()
+                        .setColor(0xFF0000)
+                        .setTitle('🔗 Anti-Link Violation')
+                        .addFields(
+                            { name: 'User', value: message.author.tag, inline: true },
+                            { name: 'Channel', value: `<#${message.channel.id}>`, inline: true },
+                            { name: 'Content', value: message.content.substring(0, 200), inline: false },
+                            { name: 'Action', value: 'Timeout (1 minute)', inline: true }
+                        )
+                        .setTimestamp();
+                    await logChannel.send({ embeds: [embed] });
+                }
+            }
+        } catch (err) {
+            console.error(`[ANTI-LINK] Failed to timeout: ${err.message}`);
+        }
+    }
+});
+
+// Also check edited messages
+client.on('messageUpdate', async (old, newMsg) => {
+    if (!newMsg.guild || newMsg.author?.bot) return;
+    if (newMsg.content?.startsWith('!')) return;
+    if (isMod(newMsg.member)) return;
+    
+    const message = newMsg.partial ? await newMsg.fetch().catch(() => null) : newMsg;
+    if (!message || !message.content) return;
+    
+    if (LINK_REGEX.test(message.content)) {
+        await message.delete().catch(() => {});
+        
+        try {
+            const warnMsg = await message.channel.send(`${message.author} ry7 t9wd mra jaya`);
+            setTimeout(() => warnMsg.delete().catch(() => {}), 3000);
+        } catch (err) {}
+        
+        if (!message.member.isCommunicationDisabled()) {
+            await message.member.timeout(60000, "Edited message to add link").catch(() => {});
+        }
+    }
+});
+
+// ============================================
 // STATS COMMANDS
 // ============================================
 async function cmdInfo(message, targetUser) {
@@ -509,6 +602,7 @@ async function cmdInfo(message, targetUser) {
 // ============================================
 client.on('messageCreate', async (msg) => {
     if (msg.author.bot || !msg.guild) return;
+    if (msg.content.startsWith('!')) return;
     updateMessageStats(msg.author.id, 1);
 });
 
@@ -546,28 +640,6 @@ client.on('messageUpdate', async (old, neu) => {
         { name: 'After', value: neu.content?.slice(0, 500) || 'Empty', inline: false }
     ).setTimestamp();
     await ch.send({ embeds: [embed] });
-});
-
-// Anti-spam/link
-client.on('messageCreate', async (msg) => {
-    if (msg.author.bot || !msg.guild || isMod(msg.member)) return;
-    const now = Date.now();
-    const key = `${msg.author.id}_${msg.channel.id}`;
-    const timestamps = spamMap.get(key) || [];
-    timestamps.push(now);
-    const recent = timestamps.filter(t => now - t < 5000);
-    spamMap.set(key, recent);
-    if (recent.length > 5) {
-        await msg.delete();
-        const w = await msg.channel.send(`${msg.author}, no spam!`);
-        setTimeout(() => w.delete(), 3000);
-        return;
-    }
-    if (/(https?:\/\/[^\s]+|discord\.gg\/[^\s]+)/i.test(msg.content)) {
-        await msg.delete();
-        const w = await msg.channel.send(`${msg.author}, no links!`);
-        setTimeout(() => w.delete(), 5000);
-    }
 });
 
 // ============================================
@@ -692,7 +764,7 @@ client.on('messageCreate', async (message) => {
     const cmd = args.shift().toLowerCase();
     const { member, guild, channel } = message;
 
-    const modCmds = ['ban', 'kick', 'mute', 'unmute', 'warn', 'clear', 'lock', 'unlock', 'giverole', 'removerole', 'unban', 'ann', 'anni', 'ticketsetup', 'ticket', 'giveaway', 'roltest', 'verif', 'sendpanel', 'verifstatus', 'resetverif', 'freegame', 'stopfreegame'];
+    const modCmds = ['ban', 'kick', 'mute', 'unmute', 'warn', 'clear', 'lock', 'unlock', 'giverole', 'removerole', 'unban', 'ann', 'anni', 'ticketsetup', 'ticket', 'roltest', 'verif', 'sendpanel', 'verifstatus', 'resetverif', 'freegame', 'stopfreegame'];
     if (modCmds.includes(cmd) && !isMod(member)) return message.reply('❌ Permission denied!');
 
     // HELP
@@ -1008,11 +1080,11 @@ client.once('ready', async () => {
     console.log(`✅ ${client.user.tag} online!`);
     console.log(`📋 Prefix: !`);
     console.log(`🎮 Free games ready`);
+    console.log(`🔗 Anti-link system ACTIVE - Links will be deleted and users timed out`);
     console.log(`📢 Welcome channel: ${WELCOME_CHANNEL_ID || 'Not set'}`);
     console.log(`🎤 Voice channel: ${VOICE_CHANNEL_ID || 'Not set'}`);
     client.user.setActivity('!help', { type: 3 });
     
-    // Auto-join voice channel on startup
     setTimeout(() => joinVoiceChannelProper(), 3000);
 });
 
