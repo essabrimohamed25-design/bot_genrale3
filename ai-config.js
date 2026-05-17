@@ -1,5 +1,4 @@
-// ai-config.js - AI Chat System with Multi-language Support
-// This is a lightweight, zero-dependency AI system
+// ai-config.js - AI Chat System with Multi-language Support (Darija, Arabic, French, English)
 
 class AIConfig {
     constructor() {
@@ -73,23 +72,23 @@ class AIConfig {
         this.frenchResponses = {
             greetings: [
                 "✨ Bonjour! Comment puis-je vous aider aujourd'hui?",
-                "🌙 Salut! Comment ça va aujourd'hui?",
-                "🤗 Bonjour! En quoi puis-je vous être utile?"
+                "🌙 Salut! Comment ca va aujourd'hui?",
+                "🤗 Bonjour! En quoi puis-je vous etre utile?"
             ],
             howAreYou: [
-                "🤗 Très bien, merci! Et vous? Comment puis-je vous assister?",
+                "🤗 Tres bien, merci! Et vous? Comment puis-je vous assister?",
                 "😊 Bien, merci! Comment allez-vous?"
             ],
             thanks: [
-                "💖 Avec plaisir! N'hésitez pas si vous avez d'autres questions.",
+                "💖 Avec plaisir! N'hesitez pas si vous avez d'autres questions.",
                 "🥰 Je vous en prie! Heureux d'avoir pu aider."
             ],
             askQuestion: [
-                "💡 Excellente question! Laissez-moi réfléchir.",
-                "📚 Bonne question! Je vais vous aider avec ça."
+                "💡 Excellente question! Laissez-moi reflechir.",
+                "📚 Bonne question! Je vais vous aider avec ca."
             ],
             default: [
-                "🌙 Bonjour! Je suis là pour vous aider. De quoi avez-vous besoin aujourd'hui?",
+                "🌙 Bonjour! Je suis la pour vous aider. De quoi avez-vous besoin aujourd'hui?",
                 "🤖 Salut! Je suis votre assistant IA. Comment puis-je vous aider?"
             ]
         };
@@ -140,7 +139,7 @@ class AIConfig {
         if (arabicPattern.test(text)) return 'arabic';
         
         // French detection
-        const frenchWords = ['bonjour', 'salut', 'comment', 'merci', 'ça va', 'bien', 'tres', 'pourquoi', 'quoi', 'oui', 'non', 'ami', 'maison'];
+        const frenchWords = ['bonjour', 'salut', 'comment', 'merci', 'ca va', 'bien', 'tres', 'pourquoi', 'quoi', 'oui', 'non', 'ami', 'maison'];
         let frenchCount = 0;
         for (const word of frenchWords) {
             if (lowercaseText.includes(word)) frenchCount++;
@@ -212,7 +211,7 @@ class AIConfig {
                 case 'french':
                     if (lowerQuestion.includes('bonjour') || lowerQuestion.includes('salut')) {
                         response = this.getRandomResponse(this.frenchResponses.greetings);
-                    } else if (lowerQuestion.includes('comment') || lowerQuestion.includes('ça va')) {
+                    } else if (lowerQuestion.includes('comment') || lowerQuestion.includes('ca va')) {
                         response = this.getRandomResponse(this.frenchResponses.howAreYou);
                     } else if (lowerQuestion.includes('merci')) {
                         response = this.getRandomResponse(this.frenchResponses.thanks);
