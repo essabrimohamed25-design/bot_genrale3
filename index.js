@@ -387,7 +387,7 @@ async function sendWelcome(member) {
     const embed = new EmbedBuilder()
         .setColor(0x5865F2)
         .setTitle(`🎉 WELCOME TO ${member.guild.name.toUpperCase()} 🎉`)
-        .setDescription(`Hey ${member.toString()}! Welcome to the community! ✨\n\nWe're glad to have you here.`)
+        .setDescription(`Hey ${member.toString()}! Welcome to the community! ✨\n\nWe are glad to have you here.`)
         .setThumbnail(member.user.displayAvatarURL({ size: 1024, dynamic: true }))
         .setTimestamp()
         .setFooter({ text: member.guild.name });
@@ -430,7 +430,7 @@ client.on('messageCreate', async (message) => {
                 .setDescription('Chat with the AI assistant in multiple languages!')
                 .addFields(
                     { name: 'Usage', value: '`\\ia <your message>`', inline: false },
-                    { name: 'Examples', value: '`\\ia Salam alikom, labas?`\n`\\ia How are you?`\n`\\ia Comment ça va?`\n`\\ia كيف حالك؟`', inline: false },
+                    { name: 'Examples', value: '`\\ia Salam alikom, labas?`\n`\\ia How are you?`\n`\\ia Comment ca va?`\n`\\ia كيف حالك؟`', inline: false },
                     { name: 'Supported Languages', value: '🇲🇦 Darija • 🇸🇦 Arabic • 🇫🇷 French • 🇬🇧 English', inline: false }
                 )
                 .setTimestamp();
@@ -452,7 +452,7 @@ client.on('messageCreate', async (message) => {
             .addFields(
                 { name: '📝 Commands', value: '`\\ia <message>` - Chat with AI\n`1-we <question>` - Quick AI response\n`!iahelp` - Show this help', inline: false },
                 { name: '🌍 Language Support', value: '🇲🇦 **Darija** (الدارجة)\n🇸🇦 **Arabic** (العربية)\n🇫🇷 **French** (Français)\n🇬🇧 **English**', inline: false },
-                { name: '💡 Examples', value: '`\\ia Salam alikom, labas?`\n`1-we شنو أخبارك؟`\n`\\ia Comment ça va aujourd'hui?`', inline: false },
+                { name: '💡 Examples', value: '`\\ia Salam alikom, labas?`\n`1-we شنو أخبارك؟`\n`\\ia Comment ca va aujourd hui?`', inline: false },
                 { name: '📊 Statistics', value: `Active users: ${stats.activeUsers}\n🗣️ Darija: ${stats.languages.darija}\n📖 Arabic: ${stats.languages.arabic}\n🇫🇷 French: ${stats.languages.french}\n🇬🇧 English: ${stats.languages.english}`, inline: true }
             )
             .setFooter({ text: 'AI remembers your language preference for 30 minutes' })
@@ -588,7 +588,7 @@ client.on('messageCreate', async (message) => {
         return;
     }
     
-    // Other commands (simplified versions)
+    // Other commands
     if (cmd === 'userinfo') {
         const target = args[0] ? await getMember(guild, args[0]) : member;
         if (!target) return message.reply('❌ Not found');
@@ -684,6 +684,32 @@ client.on('messageCreate', async (message) => {
         return;
     }
     
+    if (cmd === 'giverole' && args[0] && args[1]) {
+        const target = await getMember(guild, args[0]);
+        const role = guild.roles.cache.get(args[1]);
+        if (!target || !role) return message.reply('❌ Not found');
+        await target.roles.add(role);
+        await message.reply(`✅ Added ${role.name} to ${target.user.tag}`);
+        return;
+    }
+    
+    if (cmd === 'removerole' && args[0] && args[1]) {
+        const target = await getMember(guild, args[0]);
+        const role = guild.roles.cache.get(args[1]);
+        if (!target || !role) return message.reply('❌ Not found');
+        await target.roles.remove(role);
+        await message.reply(`✅ Removed ${role.name} from ${target.user.tag}`);
+        return;
+    }
+    
+    if (cmd === 'unban' && args[0]) {
+        const user = await client.users.fetch(args[0]).catch(() => null);
+        if (!user) return message.reply('❌ Not found');
+        await guild.members.unban(user);
+        await message.reply(`✅ Unbanned ${user.tag}`);
+        return;
+    }
+    
     // Setup commands
     if (cmd === 'ticketsetup') { await setupTicket(message); return; }
     if (cmd === 'ticket') { 
@@ -703,6 +729,64 @@ client.on('messageCreate', async (message) => {
         const ch = guild.channels.cache.get(cfg.channel);
         if (ch) await sendVerifPanel(ch);
         message.reply(`✅ Panel sent`);
+        return;
+    }
+    if (cmd === 'verifstatus') {
+        const cfg = await getVerif(guild.id);
+        if (!cfg) return message.reply('❌ Not configured');
+        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('Verification Status')
+            .addFields(
+                { name: 'Auto Role', value: `<@&${cfg.auto_role}>`, inline: true },
+                { name: 'Verified Role', value: `<@&${cfg.verified_role}>`, inline: true },
+                { name: 'Channel', value: `<#${cfg.channel}>`, inline: true }
+            );
+        message.reply({ embeds: [embed] });
+        return;
+    }
+    if (cmd === 'resetverif') {
+        db.run(`DELETE FROM verification_config WHERE guild_id = ?`, [guild.id]);
+        message.reply('✅ Verification config reset');
+        return;
+    }
+    if (cmd === 'anni') {
+        await message.delete();
+        await sendWelcome(channel);
+        return;
+    }
+    if (cmd === 'warn' && args[0]) {
+        const target = await getMember(guild, args[0]);
+        if (!target) return message.reply('❌ Not found');
+        const reason = args.slice(1).join(' ') || 'No reason';
+        await addWarning(target.id, guild.id, reason, member.user.tag);
+        const count = await getWarnCount(target.id, guild.id);
+        await message.reply(`✅ Warned ${target.user.tag} (Total: ${count})`);
+        return;
+    }
+    if (cmd === 'giveaway' && args[0] && args[1] && args[2]) {
+        const prize = args[0];
+        const duration = parseInt(args[1]);
+        const winners = parseInt(args[2]);
+        const end = Date.now() + (duration * 60000);
+        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('🎉 GIVEAWAY')
+            .setDescription(`**Prize:** ${prize}\n**Winners:** ${winners}\n**Duration:** ${duration}m`)
+            .setFooter({ text: 'React 🎉' }).setTimestamp(end);
+        const msg = await channel.send({ embeds: [embed] });
+        await msg.react('🎉');
+        db.run(`INSERT INTO giveaways (message_id, channel_id, prize, winners, end_time) VALUES (?, ?, ?, ?, ?)`, [msg.id, channel.id, prize, winners, end]);
+        setTimeout(async () => {
+            const fetched = await msg.fetch();
+            const reaction = fetched.reactions.cache.get('🎉');
+            let participants = reaction ? (await reaction.users.fetch()).filter(u => !u.bot) : [];
+            const selected = [];
+            for (let i = 0; i < Math.min(winners, participants.size); i++) {
+                const idx = Math.floor(Math.random() * participants.size);
+                selected.push([...participants][idx]);
+            }
+            const result = new EmbedBuilder().setColor(selected.length ? 0x22C55E : 0xEF4444).setTitle('🎉 GIVEAWAY ENDED')
+                .setDescription(`**Prize:** ${prize}\n**Winners:** ${selected.length ? selected.map(w => w.toString()).join(', ') : 'None'}`);
+            await channel.send({ embeds: [result] });
+        }, duration * 60000);
+        await message.reply(`✅ Giveaway started for ${prize}!`);
         return;
     }
 });
@@ -809,6 +893,11 @@ client.on('interactionCreate', async (interaction) => {
         await delTicket(interaction.user.id, interaction.guild.id);
         await interaction.reply('🔒 Closing...');
         setTimeout(() => interaction.channel.delete(), 3000);
+    }
+    
+    if (interaction.customId === 'claim_ticket') {
+        if (!isMod(interaction.member)) return interaction.reply({ content: '❌ No permission', ephemeral: true });
+        await interaction.reply({ embeds: [new EmbedBuilder().setColor(0x22C55E).setTitle('🎫 Claimed').setDescription(`${interaction.user} claimed this ticket`)] });
     }
 });
 
