@@ -8,7 +8,7 @@ const AIConfig = require('./ai-config.js');
 
 // Initialize AI
 const aiSystem = new AIConfig();
-console.log('🤖 AI System Loaded - Supports Darija, Arabic, French, English');
+console.log('🤖 AI System Loaded - Natural Darija, Arabic, French, English');
 
 // Database setup
 const db = new sqlite3.Database('./bot_data.db');
@@ -422,10 +422,10 @@ client.on('messageCreate', async (message) => {
             const helpEmbed = new EmbedBuilder()
                 .setColor(0x5865F2)
                 .setTitle('🤖 AI Chat Command')
-                .setDescription('Chat with the AI assistant in multiple languages!')
+                .setDescription('Chat with the AI assistant naturally!')
                 .addFields(
                     { name: 'Usage', value: '`!ai <your message>`', inline: false },
-                    { name: 'Examples', value: '`!ai Salam alikom, labas?`\n`!ai How are you?`\n`!ai Comment ca va?`\n`!ai كيف حالك؟`', inline: false },
+                    { name: 'Examples', value: '`!ai slm`\n`!ai labas?\n`!ai كيف حالك؟`\n`!ai Comment ca va?`\n`!ai How are you?`', inline: false },
                     { name: 'Supported Languages', value: '🇲🇦 Darija • 🇸🇦 Arabic • 🇫🇷 French • 🇬🇧 English', inline: false }
                 )
                 .setTimestamp();
@@ -440,7 +440,7 @@ client.on('messageCreate', async (message) => {
     // ========== AI COMMAND: !ask ==========
     if (cmd === 'ask') {
         if (!args.length) {
-            return message.reply('❌ Please provide a question!\nExample: `!ask What is the weather today?`');
+            return message.reply('❌ Please provide a question!\nExample: `!ask chno had lhaja?`');
         }
         const question = args.join(' ');
         await message.channel.sendTyping();
@@ -453,15 +453,15 @@ client.on('messageCreate', async (message) => {
         const stats = aiSystem.getStats();
         const embed = new EmbedBuilder()
             .setColor(0x5865F2)
-            .setTitle('🤖 AI Chat System - Help')
-            .setDescription('Chat with the AI assistant! Supports multiple languages including Darija (Moroccan Arabic).')
+            .setTitle('🤖 AI Chat System - Natural Conversations')
+            .setDescription('Chat with the AI assistant that speaks naturally like a real person!')
             .addFields(
-                { name: '📝 Commands', value: '`!ai <message>` - Chat with AI\n`!ask <question>` - Ask a question\n`!iahelp` - Show this help', inline: false },
-                { name: '🌍 Language Support', value: '🇲🇦 **Darija** (الدارجة)\n🇸🇦 **Arabic** (العربية)\n🇫🇷 **French** (Français)\n🇬🇧 **English**', inline: false },
-                { name: '💡 Examples', value: '`!ai Salam alikom, labas?`\n`!ask شنو أخبارك؟`\n`!ai Comment ca va aujourd hui?`\n`!ask What is your purpose?`', inline: false },
+                { name: '📝 Commands', value: '`!ai <message>` - Chat naturally\n`!ask <question>` - Ask anything\n`!iahelp` - Show this help', inline: false },
+                { name: '🌍 Language Support', value: '🇲🇦 **Darija** (الدارجة) - Natural Moroccan Arabic\n🇸🇦 **Arabic** (العربية)\n🇫🇷 **French** (Français)\n🇬🇧 **English**', inline: false },
+                { name: '💡 Examples', value: '`!ai slm` - Bot replies: wa 3lykom slm\n`!ai labas?` - Bot replies naturally\n`!ask chno hadchi?` - Ask anything in Darija', inline: false },
                 { name: '📊 Statistics', value: `Active users: ${stats.activeUsers}\n🗣️ Darija: ${stats.languages.darija}\n📖 Arabic: ${stats.languages.arabic}\n🇫🇷 French: ${stats.languages.french}\n🇬🇧 English: ${stats.languages.english}`, inline: true }
             )
-            .setFooter({ text: 'AI remembers your language preference for 30 minutes' })
+            .setFooter({ text: 'The AI responds naturally in your language!' })
             .setTimestamp();
         return message.reply({ embeds: [embed] });
     }
@@ -475,7 +475,7 @@ client.on('messageCreate', async (message) => {
         const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('🛡️ Commands')
             .setDescription('**Moderation:** `!ban`, `!kick`, `!mute`, `!unmute`, `!warn`, `!clear`, `!lock`, `!unlock`, `!giverole`, `!removerole`, `!unban`')
             .addFields(
-                { name: '🤖 AI Chat', value: '`!ai <message>` - Chat with AI\n`!ask <question>` - Ask AI\n`!iahelp` - AI help', inline: false },
+                { name: '🤖 AI Chat', value: '`!ai <message>` - Chat naturally\n`!ask <question>` - Ask AI\n`!iahelp` - AI help', inline: false },
                 { name: '🎮 Free Games', value: '`!freegame` - Start free games\n`!stopfreegame` - Stop', inline: false },
                 { name: 'ℹ️ Info', value: '`!userinfo`, `!serverinfo`, `!avatar`, `!info`', inline: false },
                 { name: '📊 Stats', value: '`!rank`, `!top`, `!messages`, `!voice`', inline: false },
@@ -927,9 +927,10 @@ client.on('interactionCreate', async (interaction) => {
 client.once('ready', async () => {
     await loadSentGames();
     console.log(`✅ ${client.user.tag} is online!`);
-    console.log(`🤖 AI Chat System Ready`);
+    console.log(`🤖 AI Chat System Ready - Natural Darija Support`);
     console.log(`📝 AI Commands: !ai <message> | !ask <question> | !iahelp`);
-    console.log(`🌍 Languages: Darija, Arabic, French, English`);
+    console.log(`🌍 Languages: Darija (Natural), Arabic, French, English`);
+    console.log(`💬 Example: !ai slm -> wa 3lykom slm`);
     client.user.setActivity('!ai or !ask', { type: 3 });
     setTimeout(() => joinVoiceChannelProper(), 3000);
 });
