@@ -1,9 +1,11 @@
 {
-  "name": "discord-moderation-bot",
+  "name": "discord-multi-bot",
   "version": "1.0.0",
+  "description": "Multi-feature Discord bot with AI chat, moderation, and free games",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "dev": "nodemon index.js"
   },
   "dependencies": {
     "@discordjs/voice": "^0.16.0",
@@ -12,7 +14,10 @@
     "dotenv": "^16.3.1",
     "sqlite3": "^5.1.6"
   },
-  "engines": {
-    "node": "18.x"
-  }
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "keywords": ["discord", "bot", "ai", "moderation", "games", "darija"],
+  "author": "Your Name",
+  "license": "MIT"
 }
