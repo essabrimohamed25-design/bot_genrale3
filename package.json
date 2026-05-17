@@ -1,7 +1,7 @@
 {
   "name": "discord-multi-bot",
   "version": "1.0.0",
-  "description": "Multi-feature Discord bot with AI chat, moderation, and free games",
+  "description": "Multi-feature Discord bot with natural AI chat, moderation, and free games",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -16,7 +16,7 @@
   "devDependencies": {
     "nodemon": "^3.0.1"
   },
-  "keywords": ["discord", "bot", "ai", "moderation", "darija"],
+  "keywords": ["discord", "bot", "ai", "moderation", "darija", "moroccan"],
   "author": "Your Name",
   "license": "MIT"
 }
