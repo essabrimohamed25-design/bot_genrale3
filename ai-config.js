@@ -1,124 +1,177 @@
-// ai-config.js - AI Chat System with Multi-language Support (Darija, Arabic, French, English)
+// ai-config.js - Natural AI Chat System with Darija Support
 
 class AIConfig {
     constructor() {
         this.conversationHistory = new Map();
         this.userLanguage = new Map();
         
-        // Darija (Moroccan Arabic) responses
+        // Natural Darija responses (Moroccan Arabic - like a real person)
         this.darijaResponses = {
             greetings: [
-                "🎉 Salamou 3likom! Labas? Kifach n3awnek lyoum? 😊",
-                "✨ Ahlan! Labas 3lik? Chno baghi t9oul?",
-                "🤗 Salam! Kidayr? Nta baghi tsewwel 3la 7aja?",
-                "🌙 Labas? Hna nsaa3dek f had lw9t!"
+                "wa 3lykom slm, labas?",
+                "3lykom slm, kidayr nta?",
+                "wa 3lykom slm, hna tayrin!",
+                "3lykom slm, chno khabar?",
+                "wa 3lykom slm, sh7al had lghibat!",
+                "3lykom slm, labas 3lik?",
+                "wa 3lykom slm, tkhlef?",
+                "3lykom slm, ahla bik fhad lblad!"
             ],
             howAreYou: [
-                "🤗 Lhamdullah, mzyan! Nta kidayr?",
-                "😊 Mzyan, chokran! Nta labas?",
-                "👍 Koulchi mzyan! Kifash n3awnek?"
+                "labas lhamdullah, nta kidayr?",
+                "mzyan, chokran! w nta?",
+                "kulchi mzyan, nta labas?",
+                "lhamdullah, baghi n3awnek f 7aja?",
+                "mzyan bzzaf, chno khassek?",
+                "labas, chno baghi t'aref?",
+                "lhamdullah, 3lach sawwalt?"
             ],
             thanks: [
-                "🥰 L3afou! Mzyan nsaa3dek.",
-                "💖 Hna lil wqtek! Nta tb9a f lkhir.",
-                "😊 Chokran bzzaf! T3ayt lya f waqt okhr."
+                "l3afou, hna f lkhidma dialek",
+                "chokran bzzaf, nta lmezyan",
+                "hna had lwqtek, t3ayt lya f ay waqt",
+                "l3afou, nta tb9a f lkhir",
+                "chokran, 3la lmghribiya f rassek",
+                "l3afou, bla mzahra",
+                "hna lkhidma, ta7yatna lik"
             ],
             askQuestion: [
-                "💡 Hado su'al mzyan! Wach baghi t'aref 3la haga mzyana?",
-                "🤔 Su'al mezyan. Khassek t'aref had lhaja bntiqa...",
-                "📚 Hado su'al zwina! Nshreh lik b tafsir?"
+                "ah, su'al mzyan! chno baghi t'aref bdabt?",
+                "sara7a, su'al zwina. nta baghi t'aref 3la 7aja mo3ayena?",
+                "had su'al mhm. nshre7 lik b tafsir?",
+                "ah, fhemtek. baghi t'aref chno had lhaja?",
+                "su'al mezyan, safi nchre7 lik.",
+                "wakha, had su'al sahla, nta baghi t'aref...",
+                "fhemt 3lik, ila baghi nta nshre7 lik b sa7bi."
             ],
             compliment: [
-                "😊 Chokran bzzaf! Nta lemezyan f lwqat.",
-                "🥰 L3ziza 3liya had lklamat! Chno baghi t'aref?"
+                "ah chokran, nta lmezyan f lwqat!",
+                "wa sahbi, chokran bzzaf!",
+                "l3ziza 3liya had lklamat, chokran!",
+                "nta li mezyan, chokran sa7bi!",
+                "ah chokran, hadchi f rassek!",
+                "nta zwin had lmra, chokran!"
             ],
             why: [
-                "🤔 3lach? Hado su'al mezyan. Khassek t'aref had lhaja...",
-                "💡 3lach? Hna nshre7 lik b lma'qoul..."
+                "3lach? had su'al mhm. nta baghi t'aref lhaja...",
+                "3lach? sara7a, had lhaja liha tafsir.",
+                "ah 3lach, nshre7 lik b lmaqoul...",
+                "3lach? ila baghi t'aref, hadi hiya l9issa...",
+                "3lach nta sawwal? mzyan nchre7 lik.",
+                "wach baghi t'aref 3lach? safi..."
+            ],
+            farewell: [
+                "bslama, tban 3la khir!",
+                "allah y3awnek, nchlh nta tban lkhir",
+                "bslama, t3ayt lya f waqt okhr",
+                "nchlh nta tb9a f lkhir, bslama",
+                "allaah ysahal, bslama",
+                "bslama, tban 3la khir sa7bi"
             ],
             default: [
-                "🌙 Salam! Ana hna n3awenek. Wach tahder 3la haja mo3ayena?",
-                "🤖 Ana Hna! Chno baghi t'sali lyoum?",
-                "💬 Salam! Qolli chno mochkiltek w n3awnek."
+                "ah, hna nsma3 lik. chno baghi t9oul bdabt?",
+                "sara7a, fhemtek nta. safi goul liya chno khassek.",
+                "hna hna, goul liya chno baghi w n3awnek.",
+                "ah sahbi, hadchi sahla. goul liya chno khassek.",
+                "wakha, nta goul w ana n3awnek.",
+                "hna m3ak, goul chno baghi tsewwel 3lih.",
+                "safi, nta hder w ana nsma3 lik 3la rasek.",
+                "ah, hna hna f lkhidma. goul liya chno mochkiltek."
             ]
         };
         
-        // Arabic responses
+        // Natural Arabic responses
         this.arabicResponses = {
             greetings: [
-                "✨ وعليكم السلام ورحمة الله! كيف أقدر أساعدك اليوم؟",
-                "🌙 أهلاً وسهلاً! كيف يمكنني خدمتك؟",
-                "🤗 مرحباً! كيف حالك؟"
+                "وعليكم السلام ورحمة الله، كيف الحال؟",
+                "اهلا وسهلا، كيف تقدر أساعدك؟",
+                "مرحباً، شلونك اليوم؟",
+                "السلام عليكم، أهلاً بك",
+                "وعليكم السلام، نورت"
             ],
             howAreYou: [
-                "🤗 الحمد لله بخير! شكراً للسؤال. كيف أقدر أخدمك؟",
-                "😊 بخير، شكراً! وأنت كيف حالك؟"
+                "الحمد لله بخير، كيف انت؟",
+                "بخير شكراً، وانت كيفك؟",
+                "الحمد لله، شو اخبارك؟",
+                "تمام، قول لي كيف أقدر أخدمك",
+                "بخير، شو بدك تسأل؟"
             ],
             thanks: [
-                "💖 عفواً! سعيد بمساعدتك.",
-                "🥰 على الرحب والسعة! هل تريد شيئاً آخر؟"
-            ],
-            askQuestion: [
-                "💡 سؤال رائع! دعني أفكر في هذا.",
-                "📚 سؤال جميل! كيف يمكنني مساعدتك بشكل أفضل؟"
+                "عفواً، هذا واجبي",
+                "العفو، تحت أمرك",
+                "اهلاً وسهلاً، في الخدمة",
+                "على الرحب والسعة",
+                "عفواً، اتصل بنا في اي وقت"
             ],
             default: [
-                "🌙 مرحباً! أنا هنا للمساعدة. ماذا تريد أن تعرف اليوم؟",
-                "🤖 أنا المساعد الذكي! كيف يمكنني خدمتك؟"
+                "اهلاً، قول لي شو بدك تسأل؟",
+                "مرحباً، كيف اقدر اساعدك؟",
+                "اهلاً، انا هنا للمساعدة",
+                "قول لي، شو الي ببالك؟"
             ]
         };
         
-        // French responses
+        // Natural French responses
         this.frenchResponses = {
             greetings: [
-                "✨ Bonjour! Comment puis-je vous aider aujourd'hui?",
-                "🌙 Salut! Comment ca va aujourd'hui?",
-                "🤗 Bonjour! En quoi puis-je vous etre utile?"
+                "Salut! Comment ca va?",
+                "Bonjour! Comment puis-je t'aider?",
+                "Hey! Quoi de neuf?",
+                "Salut! Tu vas bien?",
+                "Coucou! Comment ca se passe?"
             ],
             howAreYou: [
-                "🤗 Tres bien, merci! Et vous? Comment puis-je vous assister?",
-                "😊 Bien, merci! Comment allez-vous?"
+                "Ca va super, merci! Et toi?",
+                "Tres bien, merci! Tu as besoin de quoi?",
+                "Nickel, et toi? Comment tu vas?",
+                "Impeccable! Qu'est-ce que tu veux savoir?"
             ],
             thanks: [
-                "💖 Avec plaisir! N'hesitez pas si vous avez d'autres questions.",
-                "🥰 Je vous en prie! Heureux d'avoir pu aider."
-            ],
-            askQuestion: [
-                "💡 Excellente question! Laissez-moi reflechir.",
-                "📚 Bonne question! Je vais vous aider avec ca."
+                "Avec plaisir! Tu me dis si t'as besoin d'autre chose",
+                "De rien! C'est normal",
+                "Pas de soucis! Je suis la pour ca",
+                "Derien! N'hesite pas si t'as des questions"
             ],
             default: [
-                "🌙 Bonjour! Je suis la pour vous aider. De quoi avez-vous besoin aujourd'hui?",
-                "🤖 Salut! Je suis votre assistant IA. Comment puis-je vous aider?"
+                "Salut! Qu'est-ce que tu veux savoir?",
+                "Coucou! Comment je peux t'aider?",
+                "Hey! Tu as besoin de quelque chose?",
+                "Allo! Dis moi ce que tu cherches"
             ]
         };
         
-        // English responses
+        // Natural English responses
         this.englishResponses = {
             greetings: [
-                "✨ Hello there! How can I help you today? 😊",
-                "🌙 Hi! How's your day going?",
-                "🤗 Hey there! What can I do for you?"
+                "Hey there! How's it going?",
+                "Hello! What's up?",
+                "Hi! How can I help you?",
+                "Hey! Good to see you!",
+                "Hello there! What do you need?"
             ],
             howAreYou: [
-                "🤗 I'm doing great, thanks for asking! How about you?",
-                "😊 I'm wonderful! How can I assist you today?"
+                "I'm doing great, thanks for asking! How about you?",
+                "Pretty good! What's on your mind?",
+                "All good here! What can I do for you?",
+                "Doing well, thanks! What's up?"
             ],
             thanks: [
-                "💖 You're very welcome! Happy to help anytime!",
-                "🥰 My pleasure! Let me know if you need anything else."
+                "You're welcome! Happy to help!",
+                "No problem! Let me know if you need anything else",
+                "Anytime! That's what I'm here for",
+                "My pleasure! Don't hesitate to ask more"
             ],
-            askQuestion: [
-                "💡 Great question! Let me think about that.",
-                "📚 That's an excellent question! Here's what I think..."
-            ],
-            why: [
-                "🤔 That's an interesting question! Let me explain...",
-                "💡 Good question! Here's why..."
+            farewell: [
+                "Take care! See you later!",
+                "Goodbye! Have a great day!",
+                "See ya! Catch you later!",
+                "Bye! Come back anytime!"
             ],
             default: [
-                "🌙 Hi there! I'm your AI assistant. What would you like to talk about?",
-                "🤖 Hello! I'm here to help. What's on your mind today?"
+                "Hey! What would you like to know?",
+                "Hi there! How can I help you today?",
+                "Hello! What's going on?",
+                "Hey! Tell me what you need"
             ]
         };
     }
@@ -126,13 +179,23 @@ class AIConfig {
     detectLanguage(text) {
         const lowercaseText = text.toLowerCase();
         
-        // Darija detection (Moroccan Arabic)
-        const darijaWords = ['salam', 'labas', 'wakha', 'ila', '3lach', 'hna', 'daba', 'bzzaf', 'shwiya', 'mzyan', 'kidayr', 'baghi', 'chno', 'wach', 'ash', 't9wd', 'ry7', 'bhal', 'm3a', '3ndi', '9rib', 'b3id', 'ah', 'la'];
+        // Darija detection (Moroccan Arabic - natural conversation)
+        const darijaPatterns = [
+            'slm', 'labas', 'wakha', 'ila', '3lach', 'hna', 'daba', 'bzzaf', 'shwiya', 'mzyan', 
+            'kidayr', 'baghi', 'chno', 'wach', 'ash', 't9wd', 'ry7', 'bhal', 'm3a', '3ndi', 
+            '9rib', 'b3id', 'ah', 'la', 'sahbi', 'sa7bi', 'mra', 'lkheir', 'wakh', 'bghit',
+            'hder', 'sara7a', 'bdabt', 'khassek', 'n3awnek', 't9oul', 'goul', 'tsewwel', '3likom'
+        ];
+        
         let darijaCount = 0;
-        for (const word of darijaWords) {
+        for (const word of darijaPatterns) {
             if (lowercaseText.includes(word)) darijaCount++;
         }
         if (darijaCount >= 1) return 'darija';
+        
+        // Check for common Moroccan Darija short forms
+        if (lowercaseText === 'slm' || lowercaseText === 'salam' || lowercaseText === 'ahlan' || 
+            lowercaseText === 'labass' || lowercaseText === 'labas') return 'darija';
         
         // Arabic detection
         const arabicPattern = /[\u0600-\u06FF]/;
@@ -174,12 +237,13 @@ class AIConfig {
             const lowerQuestion = question.toLowerCase();
             let response = "";
             
-            // Language-specific response generation
+            // Language-specific response generation with natural patterns
             switch(language) {
                 case 'darija':
-                    if (lowerQuestion.includes('salam') || lowerQuestion.includes('ahlan') || lowerQuestion.includes('labas') || lowerQuestion.includes('marhaba')) {
+                    // Check for different patterns
+                    if (lowerQuestion === 'slm' || lowerQuestion === 'salam' || lowerQuestion.includes('slm')) {
                         response = this.getRandomResponse(this.darijaResponses.greetings);
-                    } else if (lowerQuestion.includes('kifash') || lowerQuestion.includes('kif') || lowerQuestion.includes('kidayr') || lowerQuestion.includes('labas')) {
+                    } else if (lowerQuestion.includes('labas') || lowerQuestion.includes('kidayr') || lowerQuestion.includes('kifash')) {
                         response = this.getRandomResponse(this.darijaResponses.howAreYou);
                     } else if (lowerQuestion.includes('shukran') || lowerQuestion.includes('merci') || lowerQuestion.includes('chokran')) {
                         response = this.getRandomResponse(this.darijaResponses.thanks);
@@ -189,6 +253,8 @@ class AIConfig {
                         response = this.getRandomResponse(this.darijaResponses.compliment);
                     } else if (lowerQuestion.includes('3lach') || lowerQuestion.includes('lach')) {
                         response = this.getRandomResponse(this.darijaResponses.why);
+                    } else if (lowerQuestion.includes('bslama') || lowerQuestion.includes('bye') || lowerQuestion.includes('salamt')) {
+                        response = this.getRandomResponse(this.darijaResponses.farewell);
                     } else {
                         response = this.getRandomResponse(this.darijaResponses.default);
                     }
@@ -201,22 +267,18 @@ class AIConfig {
                         response = this.getRandomResponse(this.arabicResponses.howAreYou);
                     } else if (lowerQuestion.includes('شكر') || lowerQuestion.includes('مشكور')) {
                         response = this.getRandomResponse(this.arabicResponses.thanks);
-                    } else if (lowerQuestion.includes('ماذا') || lowerQuestion.includes('ايش') || lowerQuestion.includes('شنو')) {
-                        response = this.getRandomResponse(this.arabicResponses.askQuestion);
                     } else {
                         response = this.getRandomResponse(this.arabicResponses.default);
                     }
                     break;
                     
                 case 'french':
-                    if (lowerQuestion.includes('bonjour') || lowerQuestion.includes('salut')) {
+                    if (lowerQuestion.includes('bonjour') || lowerQuestion.includes('salut') || lowerQuestion.includes('coucou')) {
                         response = this.getRandomResponse(this.frenchResponses.greetings);
                     } else if (lowerQuestion.includes('comment') || lowerQuestion.includes('ca va')) {
                         response = this.getRandomResponse(this.frenchResponses.howAreYou);
                     } else if (lowerQuestion.includes('merci')) {
                         response = this.getRandomResponse(this.frenchResponses.thanks);
-                    } else if (lowerQuestion.includes('quoi') || lowerQuestion.includes('pourquoi')) {
-                        response = this.getRandomResponse(this.frenchResponses.askQuestion);
                     } else {
                         response = this.getRandomResponse(this.frenchResponses.default);
                     }
@@ -229,15 +291,15 @@ class AIConfig {
                         response = this.getRandomResponse(this.englishResponses.howAreYou);
                     } else if (lowerQuestion.includes('thank') || lowerQuestion.includes('thanks')) {
                         response = this.getRandomResponse(this.englishResponses.thanks);
-                    } else if (lowerQuestion.includes('what') || lowerQuestion.includes('why') || lowerQuestion.includes('how') || lowerQuestion.includes('when')) {
-                        response = this.getRandomResponse(this.englishResponses.askQuestion);
+                    } else if (lowerQuestion.includes('bye') || lowerQuestion.includes('goodbye') || lowerQuestion.includes('see you')) {
+                        response = this.getRandomResponse(this.englishResponses.farewell);
                     } else {
                         response = this.getRandomResponse(this.englishResponses.default);
                     }
                     break;
             }
             
-            // Store conversation history (keep last 5 exchanges)
+            // Store conversation history
             let history = this.conversationHistory.get(userId) || [];
             history.push({ user: question, assistant: response });
             if (history.length > 5) history = history.slice(-5);
@@ -247,6 +309,9 @@ class AIConfig {
             
         } catch (error) {
             console.error('AI Response Error:', error);
+            if (this.userLanguage.get(userId) === 'darija') {
+                return "sara7a, chwiya t9ayad. 3awed su'al b tariqa okhra.";
+            }
             return "❌ Sorry, I encountered an error. Please try again.";
         }
     }
