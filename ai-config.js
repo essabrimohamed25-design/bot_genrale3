@@ -1,229 +1,255 @@
-// ai-config.js - AI Chat Configuration with Multi-language Support
-// This file handles AI responses using a lightweight API approach
+// ai-config.js - AI Chat System with Multi-language Support
+// This is a lightweight, zero-dependency AI system
 
 class AIConfig {
     constructor() {
-        // Language detection patterns for Darija and other languages
-        this.languagePatterns = {
-            darija: {
-                keywords: ['hna', 'daba', 'bzzaf', 'shwiya', 'mzyan', 'wakha', 'ila', 'fhamt', '3lach', 'ana', 'nta', 'nti', 'hadi', 'hadak', 'rah', 'kayn', 'makan', 'ma3ndi', 't9wd', 'ry7', 'bhal', 'm3a', 'mn', 'f', '3la', 'lia', 'lik', '3ndi', 'baghi', 'bgheet', 'mchi', 'mshit', 'klina', 'kol', 'chrab', 'n3as', '3yit', 's7ab', 's7abi', '7b', '7bib', 'zwin', 'zwina', '7elou', '7elwa', '9rib', 'b3id', 'la', 'ah', 'wakha', 'hada', 'hadchi', 'hadok', 'dik', 'dak'],
-                greeting: /(salam|ahlan|marhaba|labas|labass|labas 3lik|labas 3likom)/i,
-                question: /(ash|ach|achno|chno|wach|chhal|chkoun|chmen|ali|3lach|imta|ftach)/i
-            },
-            arabic: {
-                keywords: /[\u0600-\u06FF]/,
-                greeting: /(السلام عليكم|اهلا|مرحبا|صباح الخير|مساء الخير)/i,
-                question: /(ما|ماذا|لماذا|كيف|أين|متى|من|هل)/i
-            },
-            french: {
-                keywords: /(bonjour|merci|comment|pourquoi|oui|non|très|bien|mal|ami|maison|voiture|jour|nuit|salut|ça va|au revoir|s'il vous plaît|je suis|tu es|il est|elle est|nous sommes|vous êtes|parler|discuter|aide|besoin|problème|erreur|travail|maison|école|voiture|chien|chat)/i,
-                greeting: /(salut|bonjour|coucou|hello|hey|yo)/i,
-                question: /(quoi|pourquoi|comment|quand|où|qui|quel|quelle|est-ce que)/i
-            },
-            english: {
-                keywords: /(hello|hi|how|what|why|where|when|who|which|yes|no|good|bad|nice|great|awesome|terrible|love|hate|like|dislike|please|thank|sorry|help|need|want|can|could|would|should|maybe|perhaps|definitely|absolutely|totally|very|really|quite|rather|some|any|many|much|more|most|few|several|both|each|every|all|some|any|no|none)/i,
-                greeting: /(hi|hello|hey|yo|sup|what's up|howdy|greetings)/i,
-                question: /(what|why|how|when|where|who|which|is|are|am|do|does|did|can|could|would|should|will)/i
-            }
-        };
-        
         this.conversationHistory = new Map();
         this.userLanguage = new Map();
+        
+        // Darija (Moroccan Arabic) responses
+        this.darijaResponses = {
+            greetings: [
+                "🎉 Salamou 3likom! Labas? Kifach n3awnek lyoum? 😊",
+                "✨ Ahlan! Labas 3lik? Chno baghi t9oul?",
+                "🤗 Salam! Kidayr? Nta baghi tsewwel 3la 7aja?",
+                "🌙 Labas? Hna nsaa3dek f had lw9t!"
+            ],
+            howAreYou: [
+                "🤗 Lhamdullah, mzyan! Nta kidayr?",
+                "😊 Mzyan, chokran! Nta labas?",
+                "👍 Koulchi mzyan! Kifash n3awnek?"
+            ],
+            thanks: [
+                "🥰 L3afou! Mzyan nsaa3dek.",
+                "💖 Hna lil wqtek! Nta tb9a f lkhir.",
+                "😊 Chokran bzzaf! T3ayt lya f waqt okhr."
+            ],
+            askQuestion: [
+                "💡 Hado su'al mzyan! Wach baghi t'aref 3la haga mzyana?",
+                "🤔 Su'al mezyan. Khassek t'aref had lhaja bntiqa...",
+                "📚 Hado su'al zwina! Nshreh lik b tafsir?"
+            ],
+            compliment: [
+                "😊 Chokran bzzaf! Nta lemezyan f lwqat.",
+                "🥰 L3ziza 3liya had lklamat! Chno baghi t'aref?"
+            ],
+            why: [
+                "🤔 3lach? Hado su'al mezyan. Khassek t'aref had lhaja...",
+                "💡 3lach? Hna nshre7 lik b lma'qoul..."
+            ],
+            default: [
+                "🌙 Salam! Ana hna n3awenek. Wach tahder 3la haja mo3ayena?",
+                "🤖 Ana Hna! Chno baghi t'sali lyoum?",
+                "💬 Salam! Qolli chno mochkiltek w n3awnek."
+            ]
+        };
+        
+        // Arabic responses
+        this.arabicResponses = {
+            greetings: [
+                "✨ وعليكم السلام ورحمة الله! كيف أقدر أساعدك اليوم؟",
+                "🌙 أهلاً وسهلاً! كيف يمكنني خدمتك؟",
+                "🤗 مرحباً! كيف حالك؟"
+            ],
+            howAreYou: [
+                "🤗 الحمد لله بخير! شكراً للسؤال. كيف أقدر أخدمك؟",
+                "😊 بخير، شكراً! وأنت كيف حالك؟"
+            ],
+            thanks: [
+                "💖 عفواً! سعيد بمساعدتك.",
+                "🥰 على الرحب والسعة! هل تريد شيئاً آخر؟"
+            ],
+            askQuestion: [
+                "💡 سؤال رائع! دعني أفكر في هذا.",
+                "📚 سؤال جميل! كيف يمكنني مساعدتك بشكل أفضل؟"
+            ],
+            default: [
+                "🌙 مرحباً! أنا هنا للمساعدة. ماذا تريد أن تعرف اليوم؟",
+                "🤖 أنا المساعد الذكي! كيف يمكنني خدمتك؟"
+            ]
+        };
+        
+        // French responses
+        this.frenchResponses = {
+            greetings: [
+                "✨ Bonjour! Comment puis-je vous aider aujourd'hui?",
+                "🌙 Salut! Comment ça va aujourd'hui?",
+                "🤗 Bonjour! En quoi puis-je vous être utile?"
+            ],
+            howAreYou: [
+                "🤗 Très bien, merci! Et vous? Comment puis-je vous assister?",
+                "😊 Bien, merci! Comment allez-vous?"
+            ],
+            thanks: [
+                "💖 Avec plaisir! N'hésitez pas si vous avez d'autres questions.",
+                "🥰 Je vous en prie! Heureux d'avoir pu aider."
+            ],
+            askQuestion: [
+                "💡 Excellente question! Laissez-moi réfléchir.",
+                "📚 Bonne question! Je vais vous aider avec ça."
+            ],
+            default: [
+                "🌙 Bonjour! Je suis là pour vous aider. De quoi avez-vous besoin aujourd'hui?",
+                "🤖 Salut! Je suis votre assistant IA. Comment puis-je vous aider?"
+            ]
+        };
+        
+        // English responses
+        this.englishResponses = {
+            greetings: [
+                "✨ Hello there! How can I help you today? 😊",
+                "🌙 Hi! How's your day going?",
+                "🤗 Hey there! What can I do for you?"
+            ],
+            howAreYou: [
+                "🤗 I'm doing great, thanks for asking! How about you?",
+                "😊 I'm wonderful! How can I assist you today?"
+            ],
+            thanks: [
+                "💖 You're very welcome! Happy to help anytime!",
+                "🥰 My pleasure! Let me know if you need anything else."
+            ],
+            askQuestion: [
+                "💡 Great question! Let me think about that.",
+                "📚 That's an excellent question! Here's what I think..."
+            ],
+            why: [
+                "🤔 That's an interesting question! Let me explain...",
+                "💡 Good question! Here's why..."
+            ],
+            default: [
+                "🌙 Hi there! I'm your AI assistant. What would you like to talk about?",
+                "🤖 Hello! I'm here to help. What's on your mind today?"
+            ]
+        };
     }
 
     detectLanguage(text) {
         const lowercaseText = text.toLowerCase();
         
-        // Check for Darija first (most important)
-        const darijaMatches = this.languagePatterns.darija.keywords.filter(word => 
-            lowercaseText.includes(word)
-        ).length;
-        
-        if (darijaMatches >= 1) {
-            return 'darija';
+        // Darija detection (Moroccan Arabic)
+        const darijaWords = ['salam', 'labas', 'wakha', 'ila', '3lach', 'hna', 'daba', 'bzzaf', 'shwiya', 'mzyan', 'kidayr', 'baghi', 'chno', 'wach', 'ash', 't9wd', 'ry7', 'bhal', 'm3a', '3ndi', '9rib', 'b3id', 'ah', 'la'];
+        let darijaCount = 0;
+        for (const word of darijaWords) {
+            if (lowercaseText.includes(word)) darijaCount++;
         }
+        if (darijaCount >= 1) return 'darija';
         
-        if (this.languagePatterns.darija.greeting.test(text)) {
-            return 'darija';
+        // Arabic detection
+        const arabicPattern = /[\u0600-\u06FF]/;
+        if (arabicPattern.test(text)) return 'arabic';
+        
+        // French detection
+        const frenchWords = ['bonjour', 'salut', 'comment', 'merci', 'ça va', 'bien', 'tres', 'pourquoi', 'quoi', 'oui', 'non', 'ami', 'maison'];
+        let frenchCount = 0;
+        for (const word of frenchWords) {
+            if (lowercaseText.includes(word)) frenchCount++;
         }
+        if (frenchCount >= 1) return 'french';
         
-        // Check for Arabic script
-        if (this.languagePatterns.arabic.keywords.test(text)) {
-            return 'arabic';
-        }
-        
-        // Check for French
-        let frenchMatches = 0;
-        const frenchKeywords = this.languagePatterns.french.keywords.toString().match(/[a-zàâçéèêëîïôûùüÿæœ]+/gi) || [];
-        frenchKeywords.forEach(word => {
-            if (lowercaseText.includes(word.toLowerCase())) frenchMatches++;
-        });
-        
-        if (frenchMatches >= 2 || this.languagePatterns.french.greeting.test(text)) {
-            return 'french';
-        }
-        
-        // Default to English
+        // Default English
         return 'english';
     }
 
-    getLanguagePrefix(language) {
-        const prefixes = {
-            darija: {
-                system: "أنت مساعد دردشة ذكي يتحدث الدارجة المغربية. رد دائماً بالدارجة المغربية. كن مفيداً، ودوداً، واختصار. استخدم التحيات والرموز التعبيرية المغربية.",
-                response: "الرد بالدارجة المغربية:"
-            },
-            arabic: {
-                system: "أنت مساعد دردشة ذكي يتحدث العربية. رد دائماً بالعربية الفصحى أو العامية المصرية. كن مفيداً وودياً واختصاراً.",
-                response: "الرد بالعربية:"
-            },
-            french: {
-                system: "Tu es un assistant de chat intelligent qui parle français. Réponds toujours en français. Sois utile, amical et concis. Utilise des émojis de temps en temps.",
-                response: "Réponse en français:"
-            },
-            english: {
-                system: "You are a smart Discord chat assistant. Always respond in English. Be helpful, friendly, and concise. Use emojis occasionally. Keep responses under 3 sentences.",
-                response: "Response in English:"
-            }
-        };
-        return prefixes[language] || prefixes.english;
+    getRandomResponse(responses) {
+        return responses[Math.floor(Math.random() * responses.length)];
     }
 
-    async generateResponse(question, userId) {
+    generateResponse(question, userId) {
         try {
-            // Detect or get user's language
+            // Get or detect language
             let language = this.userLanguage.get(userId);
             if (!language) {
                 language = this.detectLanguage(question);
                 this.userLanguage.set(userId, language);
+                
+                // Reset after 30 minutes of inactivity
+                setTimeout(() => {
+                    if (this.userLanguage.get(userId) === language) {
+                        this.userLanguage.delete(userId);
+                        this.conversationHistory.delete(userId);
+                    }
+                }, 1800000);
             }
             
-            const langPref = this.getLanguagePrefix(language);
+            const lowerQuestion = question.toLowerCase();
+            let response = "";
             
-            // Get conversation history
+            // Language-specific response generation
+            switch(language) {
+                case 'darija':
+                    if (lowerQuestion.includes('salam') || lowerQuestion.includes('ahlan') || lowerQuestion.includes('labas') || lowerQuestion.includes('marhaba')) {
+                        response = this.getRandomResponse(this.darijaResponses.greetings);
+                    } else if (lowerQuestion.includes('kifash') || lowerQuestion.includes('kif') || lowerQuestion.includes('kidayr') || lowerQuestion.includes('labas')) {
+                        response = this.getRandomResponse(this.darijaResponses.howAreYou);
+                    } else if (lowerQuestion.includes('shukran') || lowerQuestion.includes('merci') || lowerQuestion.includes('chokran')) {
+                        response = this.getRandomResponse(this.darijaResponses.thanks);
+                    } else if (lowerQuestion.includes('wach') || lowerQuestion.includes('ash') || lowerQuestion.includes('chno') || lowerQuestion.includes('chhal')) {
+                        response = this.getRandomResponse(this.darijaResponses.askQuestion);
+                    } else if (lowerQuestion.includes('7elwa') || lowerQuestion.includes('zwin') || lowerQuestion.includes('mzyan')) {
+                        response = this.getRandomResponse(this.darijaResponses.compliment);
+                    } else if (lowerQuestion.includes('3lach') || lowerQuestion.includes('lach')) {
+                        response = this.getRandomResponse(this.darijaResponses.why);
+                    } else {
+                        response = this.getRandomResponse(this.darijaResponses.default);
+                    }
+                    break;
+                    
+                case 'arabic':
+                    if (lowerQuestion.includes('السلام') || lowerQuestion.includes('اهلا') || lowerQuestion.includes('مرحبا')) {
+                        response = this.getRandomResponse(this.arabicResponses.greetings);
+                    } else if (lowerQuestion.includes('كيف') || lowerQuestion.includes('حالك')) {
+                        response = this.getRandomResponse(this.arabicResponses.howAreYou);
+                    } else if (lowerQuestion.includes('شكر') || lowerQuestion.includes('مشكور')) {
+                        response = this.getRandomResponse(this.arabicResponses.thanks);
+                    } else if (lowerQuestion.includes('ماذا') || lowerQuestion.includes('ايش') || lowerQuestion.includes('شنو')) {
+                        response = this.getRandomResponse(this.arabicResponses.askQuestion);
+                    } else {
+                        response = this.getRandomResponse(this.arabicResponses.default);
+                    }
+                    break;
+                    
+                case 'french':
+                    if (lowerQuestion.includes('bonjour') || lowerQuestion.includes('salut')) {
+                        response = this.getRandomResponse(this.frenchResponses.greetings);
+                    } else if (lowerQuestion.includes('comment') || lowerQuestion.includes('ça va')) {
+                        response = this.getRandomResponse(this.frenchResponses.howAreYou);
+                    } else if (lowerQuestion.includes('merci')) {
+                        response = this.getRandomResponse(this.frenchResponses.thanks);
+                    } else if (lowerQuestion.includes('quoi') || lowerQuestion.includes('pourquoi')) {
+                        response = this.getRandomResponse(this.frenchResponses.askQuestion);
+                    } else {
+                        response = this.getRandomResponse(this.frenchResponses.default);
+                    }
+                    break;
+                    
+                default: // English
+                    if (lowerQuestion.includes('hello') || lowerQuestion.includes('hi') || lowerQuestion.includes('hey')) {
+                        response = this.getRandomResponse(this.englishResponses.greetings);
+                    } else if (lowerQuestion.includes('how are you') || lowerQuestion.includes('how do you do')) {
+                        response = this.getRandomResponse(this.englishResponses.howAreYou);
+                    } else if (lowerQuestion.includes('thank') || lowerQuestion.includes('thanks')) {
+                        response = this.getRandomResponse(this.englishResponses.thanks);
+                    } else if (lowerQuestion.includes('what') || lowerQuestion.includes('why') || lowerQuestion.includes('how') || lowerQuestion.includes('when')) {
+                        response = this.getRandomResponse(this.englishResponses.askQuestion);
+                    } else {
+                        response = this.getRandomResponse(this.englishResponses.default);
+                    }
+                    break;
+            }
+            
+            // Store conversation history (keep last 5 exchanges)
             let history = this.conversationHistory.get(userId) || [];
-            if (history.length > 10) history = history.slice(-10);
-            
-            // Build context
-            let context = `${langPref.system}\n\n`;
-            for (const exchange of history) {
-                context += `User: ${exchange.user}\nAssistant: ${exchange.assistant}\n`;
-            }
-            context += `User: ${question}\nAssistant: ${langPref.response} `;
-            
-            // For now, use a rule-based response system with local intelligence
-            // This avoids API keys and works offline while still supporting Darija
-            const response = await this.generateLocalResponse(question, language, history);
-            
-            // Store in history
             history.push({ user: question, assistant: response });
+            if (history.length > 5) history = history.slice(-5);
             this.conversationHistory.set(userId, history);
-            
-            // Auto-clean old history after 30 minutes
-            setTimeout(() => {
-                if (this.conversationHistory.get(userId) === history) {
-                    this.conversationHistory.delete(userId);
-                    this.userLanguage.delete(userId);
-                }
-            }, 1800000);
             
             return response;
             
         } catch (error) {
             console.error('AI Response Error:', error);
-            return this.getFallbackResponse(this.userLanguage.get(userId) || 'english');
+            return "❌ Sorry, I encountered an error. Please try again.";
         }
-    }
-
-    generateLocalResponse(question, language, history) {
-        const lowerQuestion = question.toLowerCase();
-        
-        // Darija responses (Moroccan Arabic)
-        if (language === 'darija') {
-            if (lowerQuestion.includes('salam') || lowerQuestion.includes('ahlan') || lowerQuestion.includes('labas')) {
-                return "🎉 Salamou 3likom! Labas? Kifach n3awnek lyoum? 😊";
-            }
-            if (lowerQuestion.includes('kifash') || lowerQuestion.includes('kif') || lowerQuestion.includes('kidayr')) {
-                return "🤗 Lhamdullah, mzyan! Nta kidayr? Chno baghi t'sali?";
-            }
-            if (lowerQuestion.includes('shukran') || lowerQuestion.includes('merci')) {
-                return "🥰 L3afou! Mzyan nsaa3dek. Hna lil wqtek!";
-            }
-            if (lowerQuestion.includes('wach') || lowerQuestion.includes('ash') || lowerQuestion.includes('chno')) {
-                return "💡 Hado su'al mzyan! Wach baghi t'aref 3la haga mzyana?";
-            }
-            if (lowerQuestion.includes('7elwa') || lowerQuestion.includes('zwin') || lowerQuestion.includes('mezyan')) {
-                return "😊 Chokran bzzaf! Nta lemezyan f lwqat. Kifash n'awenek lmara jaya?";
-            }
-            if (lowerQuestion.includes('3lach') || lowerQuestion.includes('lach')) {
-                return "🤔 3lach? Hado su'al mezyan. Khassek t'aref had lhaja bnti9a. Wach baghi nshre7 lik b tafsir?";
-            }
-            return "🌙 Salam! Ana hna n3awenek. Wach tahder 3la haja mo3ayena? Awalo had su'al o ghatla9a jweb mzyan!";
-        }
-        
-        // Arabic responses
-        if (language === 'arabic') {
-            if (lowerQuestion.includes('السلام') || lowerQuestion.includes('اهلا')) {
-                return "✨ وعليكم السلام ورحمة الله! كيف أقدر أساعدك اليوم؟";
-            }
-            if (lowerQuestion.includes('كيف') || lowerQuestion.includes('حالك')) {
-                return "🤗 الحمد لله بخير! شكراً للسؤال. كيف أقدر أخدمك؟";
-            }
-            if (lowerQuestion.includes('شكراً') || lowerQuestion.includes('شكرا')) {
-                return "💖 عفواً! سعيد بمساعدتك. هل تريد شيئاً آخر؟";
-            }
-            if (lowerQuestion.includes('ماذا') || lowerQuestion.includes('ايش')) {
-                return "💡 سؤال رائع! دعني أفكر في هذا. كيف يمكنني مساعدتك بشكل أفضل؟";
-            }
-            return "🌙 مرحباً! أنا هنا للمساعدة. ماذا تريد أن تعرف اليوم؟";
-        }
-        
-        // French responses
-        if (language === 'french') {
-            if (lowerQuestion.includes('bonjour') || lowerQuestion.includes('salut')) {
-                return "✨ Bonjour! Comment puis-je vous aider aujourd'hui?";
-            }
-            if (lowerQuestion.includes('comment') || lowerQuestion.includes('ça va')) {
-                return "🤗 Très bien, merci! Et vous? Comment puis-je vous assister?";
-            }
-            if (lowerQuestion.includes('merci')) {
-                return "💖 Avec plaisir! N'hésitez pas si vous avez d'autres questions.";
-            }
-            if (lowerQuestion.includes('quoi') || lowerQuestion.includes('pourquoi')) {
-                return "💡 Excellente question! Laissez-moi réfléchir. Comment puis-je vous aider au mieux?";
-            }
-            return "🌙 Bonjour! Je suis là pour vous aider. De quoi avez-vous besoin aujourd'hui?";
-        }
-        
-        // English responses (default)
-        const greetings = ['hello', 'hi', 'hey', 'sup', 'yo', 'howdy'];
-        const thanks = ['thank', 'thanks', 'thx', 'ty'];
-        const questions = ['what', 'why', 'how', 'when', 'where', 'who'];
-        
-        if (greetings.some(word => lowerQuestion.includes(word))) {
-            return "✨ Hello there! How can I help you today? 😊";
-        }
-        if (thanks.some(word => lowerQuestion.includes(word))) {
-            return "💖 You're very welcome! Happy to help anytime!";
-        }
-        if (questions.some(word => lowerQuestion.includes(word))) {
-            return "💡 Great question! Let me think about that. Is there anything specific you'd like to know?";
-        }
-        if (lowerQuestion.includes('love') || lowerQuestion.includes('like')) {
-            return "🥰 That's awesome! I'm glad you feel that way. How can I make your day even better?";
-        }
-        
-        return "🌙 Hi there! I'm your AI assistant. What would you like to talk about today? Feel free to ask me anything!";
-    }
-
-    getFallbackResponse(language) {
-        const fallbacks = {
-            darija: "😅 Désolé, ana chwiya t9ayad. 3awed su'al b tariqa okhra.",
-            arabic: "😅 عذراً، واجهت مشكلة صغيرة. من فضلك أعد المحاولة مرة أخرى.",
-            french: "😅 Désolé, j'ai rencontré un petit problème. Veuillez réessayer.",
-            english: "😅 Sorry, I encountered a small issue. Please try again."
-        };
-        return fallbacks[language] || fallbacks.english;
     }
 
     getStats() {
