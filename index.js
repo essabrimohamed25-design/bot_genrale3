@@ -1,17 +1,16 @@
 const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const { joinVoiceChannel, getVoiceConnection, VoiceConnectionStatus, entersState } = require('@discordjs/voice');
 const sqlite3 = require('sqlite3').verbose();
-const axios = require('axios');
 require('dotenv').config();
 
-// ============================================
-// AI CHAT SYSTEM IMPORT
-// ============================================
+// Import AI System
 const AIConfig = require('./ai-config.js');
 
-// ============================================
-// DATABASE SETUP
-// ============================================
+// Initialize AI
+const aiSystem = new AIConfig();
+console.log('🤖 AI System Loaded - Supports Darija, Arabic, French, English');
+
+// Database setup
 const db = new sqlite3.Database('./bot_data.db');
 
 db.serialize(() => {
@@ -27,19 +26,11 @@ db.serialize(() => {
     console.log('✅ Database ready');
 });
 
-// ============================================
-// AI SYSTEM INITIALIZATION
-// ============================================
-const aiSystem = new AIConfig();
-console.log('🤖 AI Chat System initialized - Supports Darija, Arabic, French, English');
-
-// ============================================
-// CONFIG
-// ============================================
+// Config
 const { BOT_TOKEN, LOG_CHANNEL_ID, MOD_ROLE_ID, AUTO_ROLE_ID, VOICE_CHANNEL_ID, WELCOME_CHANNEL_ID } = process.env;
 
 if (!BOT_TOKEN) {
-    console.error('❌ Missing BOT_TOKEN');
+    console.error('❌ Missing BOT_TOKEN in .env file');
     process.exit(1);
 }
 
@@ -55,17 +46,13 @@ const client = new Client({
     ]
 });
 
-// ============================================
-// STORAGE
-// ============================================
+// Voice tracking
 const voiceStartTimes = new Map();
 const activeFreeGameSessions = new Map();
 const sentGamesCache = new Set();
-const linkWarnCooldown = new Map(); // Anti-link cooldown
+const linkWarnCooldown = new Map();
 
-// ============================================
-// FREE GAMES LIST
-// ============================================
+// Free games list
 const FREE_STEAM_GAMES = [
     { id: 730, title: "Counter-Strike 2", desc: "Free-to-play competitive FPS.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/730/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/730/CounterStrike_2/" },
     { id: 570, title: "Dota 2", desc: "Popular MOBA game.", image: "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/570/header.jpg", price: "$0.00", url: "https://store.steampowered.com/app/570/Dota_2/" },
@@ -82,7 +69,9 @@ const FREE_STEAM_GAMES = [
 async function loadSentGames() {
     return new Promise((resolve) => {
         db.all(`SELECT game_id FROM free_games_sent`, [], (err, rows) => {
-            if (rows) rows.forEach(row => sentGamesCache.add(String(row.game_id)));
+            if (rows && rows.length) {
+                rows.forEach(row => sentGamesCache.add(String(row.game_id)));
+            }
             console.log(`📚 Loaded ${sentGamesCache.size} sent games`);
             resolve();
         });
@@ -126,139 +115,7 @@ async function sendFreeGameEmbed(channel, game) {
     await markGameAsSent(game.id);
 }
 
-// ============================================
-// VOICE CHANNEL AUTO-JOIN
-// ============================================
-let currentVoiceConnection = null;
-let reconnectTimeout = null;
-
-async function joinVoiceChannelProper() {
-    if (!VOICE_CHANNEL_ID) {
-        console.log('⚠️ No VOICE_CHANNEL_ID configured, skipping voice join');
-        return;
-    }
-
-    try {
-        const guild = client.guilds.cache.first();
-        if (!guild) {
-            console.log('⚠️ No guild found, waiting for ready event');
-            return;
-        }
-
-        const voiceChannel = guild.channels.cache.get(VOICE_CHANNEL_ID);
-        if (!voiceChannel) {
-            console.log(`⚠️ Voice channel ${VOICE_CHANNEL_ID} not found`);
-            return;
-        }
-
-        if (voiceChannel.type !== ChannelType.GuildVoice) {
-            console.log(`⚠️ Channel ${VOICE_CHANNEL_ID} is not a voice channel`);
-            return;
-        }
-
-        const existingConnection = getVoiceConnection(guild.id);
-        if (existingConnection && existingConnection.joinConfig.channelId === VOICE_CHANNEL_ID) {
-            console.log(`✅ Already connected to voice channel: ${voiceChannel.name}`);
-            return;
-        }
-
-        if (existingConnection) {
-            existingConnection.destroy();
-            console.log('🔌 Destroyed existing voice connection');
-        }
-
-        const connection = joinVoiceChannel({
-            channelId: VOICE_CHANNEL_ID,
-            guildId: guild.id,
-            adapterCreator: guild.voiceAdapterCreator,
-            selfDeaf: false,
-            selfMute: false
-        });
-
-        currentVoiceConnection = connection;
-
-        connection.on(VoiceConnectionStatus.Ready, () => {
-            console.log(`🎤 Successfully joined voice channel: ${voiceChannel.name} (${VOICE_CHANNEL_ID})`);
-            if (reconnectTimeout) {
-                clearTimeout(reconnectTimeout);
-                reconnectTimeout = null;
-            }
-        });
-
-        connection.on(VoiceConnectionStatus.Disconnected, async () => {
-            console.log(`⚠️ Disconnected from voice channel, attempting to reconnect...`);
-            try {
-                await entersState(connection, VoiceConnectionStatus.Signalling, 5_000);
-                console.log('🔄 Reconnecting to voice channel...');
-            } catch (error) {
-                console.log('❌ Failed to reconnect, destroying connection...');
-                connection.destroy();
-                currentVoiceConnection = null;
-                if (!reconnectTimeout) {
-                    reconnectTimeout = setTimeout(() => {
-                        reconnectTimeout = null;
-                        joinVoiceChannelProper();
-                    }, 10000);
-                }
-            }
-        });
-
-        connection.on(VoiceConnectionStatus.Destroyed, () => {
-            console.log('🔌 Voice connection destroyed');
-            currentVoiceConnection = null;
-            if (!reconnectTimeout) {
-                reconnectTimeout = setTimeout(() => {
-                    reconnectTimeout = null;
-                    joinVoiceChannelProper();
-                }, 10000);
-            }
-        });
-
-        connection.on('error', (error) => {
-            console.error('❌ Voice connection error:', error.message);
-        });
-
-        await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
-        
-    } catch (error) {
-        console.error(`❌ Failed to join voice channel: ${error.message}`);
-        if (!reconnectTimeout) {
-            reconnectTimeout = setTimeout(() => {
-                reconnectTimeout = null;
-                joinVoiceChannelProper();
-            }, 30000);
-        }
-    }
-}
-
-setInterval(async () => {
-    try {
-        const guild = client.guilds.cache.first();
-        if (!guild || !client.isReady()) return;
-
-        const connection = getVoiceConnection(guild.id);
-        
-        if (!connection && VOICE_CHANNEL_ID) {
-            console.log('🔍 No voice connection found, reconnecting...');
-            await joinVoiceChannelProper();
-        }
-        
-        if (connection && connection.state.status === VoiceConnectionStatus.Disconnected) {
-            console.log('🔍 Connection in disconnected state, attempting to recover...');
-            try {
-                await entersState(connection, VoiceConnectionStatus.Signalling, 5_000);
-            } catch (error) {
-                connection.destroy();
-                currentVoiceConnection = null;
-                await joinVoiceChannelProper();
-            }
-        }
-    } catch (error) {}
-}, 30000);
-
-// ============================================
-// HELPERS
-// ============================================
+// Helper functions
 function isMod(member) {
     if (!member) return false;
     if (member.permissions.has(PermissionsBitField.Flags.Administrator)) return true;
@@ -308,9 +165,7 @@ function formatVoiceTime(minutes) {
     return `${m}m`;
 }
 
-// ============================================
-// USER STATS
-// ============================================
+// User stats functions
 async function getUserStats(userId) {
     return new Promise((resolve) => {
         db.get(`SELECT * FROM user_stats WHERE user_id = ?`, [userId], (err, row) => {
@@ -369,9 +224,7 @@ function getWarnCount(uid, gid) {
     });
 }
 
-// ============================================
-// TICKET SYSTEM
-// ============================================
+// Ticket system
 function saveTicketConfig(gid, panel, cat, log, role) { db.run(`INSERT OR REPLACE INTO ticket_config VALUES (?, ?, ?, ?, ?)`, [gid, panel, cat, log, role]); }
 function getTicketConfig(gid) { return new Promise((r) => { db.get(`SELECT * FROM ticket_config WHERE guild_id = ?`, [gid], (err, row) => r(row)); }); }
 function saveTicket(uid, cid, gid) { db.run(`INSERT OR REPLACE INTO tickets VALUES (?, ?, ?, ?)`, [uid, cid, gid, new Date().toISOString()]); }
@@ -384,9 +237,7 @@ async function sendTicketPanel(ch, cfg) {
     await ch.send({ embeds: [embed], components: [row] });
 }
 
-// ============================================
-// REACTION ROLES
-// ============================================
+// Reaction roles
 function saveRR(gid, mid, cid, emoji, rid) { db.run(`INSERT OR REPLACE INTO reaction_roles VALUES (?, ?, ?, ?, ?)`, [gid, mid, cid, emoji, rid]); }
 function getRR(gid, mid) { return new Promise((r) => { db.all(`SELECT * FROM reaction_roles WHERE guild_id = ? AND message_id = ?`, [gid, mid], (err, rows) => r(rows || [])); }); }
 
@@ -402,9 +253,7 @@ async function sendRRPanel(ch, phoneId, pcId) {
     saveRR(ch.guild.id, msg.id, ch.id, '💻', pcId);
 }
 
-// ============================================
-// VERIFICATION
-// ============================================
+// Verification
 function saveVerif(gid, auto, verified, ch, img, by) { db.run(`INSERT OR REPLACE INTO verification_config VALUES (?, ?, ?, ?, ?, ?, ?)`, [gid, auto, verified, ch, img, by, new Date().toISOString()]); }
 function getVerif(gid) { return new Promise((r) => { db.get(`SELECT * FROM verification_config WHERE guild_id = ?`, [gid], (err, row) => r(row)); }); }
 
@@ -417,17 +266,13 @@ async function sendVerifPanel(ch) {
     await ch.send({ embeds: [embed], components: [row] });
 }
 
-// ============================================
-// ANNOUNCEMENTS
-// ============================================
+// Announcements
 async function sendAnn(ch, msg) {
     const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('📢 ANNOUNCEMENT').setDescription(msg).setThumbnail(ch.guild.iconURL()).setTimestamp();
     await ch.send({ embeds: [embed] });
 }
 
-// ============================================
-// SETUP COLLECTORS
-// ============================================
+// Setup collectors
 async function setupTicket(msg) {
     const filter = (m) => m.author.id === msg.author.id;
     let step = 0;
@@ -492,39 +337,90 @@ async function setupVerif(msg) {
     });
 }
 
-// ============================================
-// ANTI-LINK SYSTEM
-// ============================================
-const LINK_REGEX = /(https?:\/\/[^\s]+|www\.[^\s]+|discord\.gg\/[^\s]+|discord\.com\/invite\/[^\s]+|dsc\.gg\/[^\s]+|[\w-]+\.(com|net|org|io|gg|xyz|me|us|uk|ca|au|de|fr|jp|cn|ru|br|in|eu|tv|app|site|online|live|club|shop|store|tech|xyz|top|ml|tk|cf|ga|gq)[\/\s]?)/i;
+// Anti-link regex
+const LINK_REGEX = /(https?:\/\/[^\s]+|www\.[^\s]+|discord\.gg\/[^\s]+|discord\.com\/invite\/[^\s]+)/i;
+
+// Voice channel auto-join
+let currentVoiceConnection = null;
+let reconnectTimeout = null;
+
+async function joinVoiceChannelProper() {
+    if (!VOICE_CHANNEL_ID) return;
+    try {
+        const guild = client.guilds.cache.first();
+        if (!guild) return;
+        const voiceChannel = guild.channels.cache.get(VOICE_CHANNEL_ID);
+        if (!voiceChannel || voiceChannel.type !== ChannelType.GuildVoice) return;
+        
+        const existingConnection = getVoiceConnection(guild.id);
+        if (existingConnection && existingConnection.joinConfig.channelId === VOICE_CHANNEL_ID) return;
+        if (existingConnection) existingConnection.destroy();
+        
+        const connection = joinVoiceChannel({
+            channelId: VOICE_CHANNEL_ID,
+            guildId: guild.id,
+            adapterCreator: guild.voiceAdapterCreator,
+            selfDeaf: false,
+            selfMute: false
+        });
+        
+        currentVoiceConnection = connection;
+        connection.on(VoiceConnectionStatus.Ready, () => console.log(`🎤 Joined voice channel: ${voiceChannel.name}`));
+        connection.on(VoiceConnectionStatus.Disconnected, () => {
+            if (!reconnectTimeout) {
+                reconnectTimeout = setTimeout(() => {
+                    reconnectTimeout = null;
+                    joinVoiceChannelProper();
+                }, 10000);
+            }
+        });
+        await entersState(connection, VoiceConnectionStatus.Ready, 15000);
+    } catch (error) {
+        console.error(`❌ Voice join error: ${error.message}`);
+    }
+}
+
+// Welcome message
+async function sendWelcome(member) {
+    const channel = member.guild.channels.cache.get(WELCOME_CHANNEL_ID);
+    if (!channel) return;
+    const embed = new EmbedBuilder()
+        .setColor(0x5865F2)
+        .setTitle(`🎉 WELCOME TO ${member.guild.name.toUpperCase()} 🎉`)
+        .setDescription(`Hey ${member.toString()}! Welcome to the community! ✨\n\nWe're glad to have you here.`)
+        .setThumbnail(member.user.displayAvatarURL({ size: 1024, dynamic: true }))
+        .setTimestamp()
+        .setFooter({ text: member.guild.name });
+    await channel.send({ content: `${member.toString()}`, embeds: [embed] });
+}
+
+// Voice time saving
+async function saveAllVoiceTime() {
+    for (const [uid, startTime] of voiceStartTimes) {
+        const mins = Math.floor((Date.now() - startTime) / 60000);
+        if (mins > 0) await updateVoiceStats(uid, mins);
+    }
+}
 
 // ============================================
-// COMMANDS & AI HANDLERS
+// MAIN MESSAGE HANDLER
 // ============================================
 client.on('messageCreate', async (message) => {
     // Ignore bots
     if (message.author.bot) return;
     
-    // ============================================
-    // AI 1-we PREFIX HANDLER
-    // ============================================
+    // ========== AI 1-we COMMAND ==========
     if (message.content.toLowerCase().startsWith('1-we ')) {
         const question = message.content.substring(5).trim();
         if (question) {
-            try {
-                await message.channel.sendTyping();
-                const response = await aiSystem.generateResponse(question, message.author.id);
-                return message.reply(response);
-            } catch (error) {
-                console.error('AI Error:', error);
-                return message.reply('❌ Sorry, AI system encountered an error. Please try again.');
-            }
+            await message.channel.sendTyping();
+            const response = aiSystem.generateResponse(question, message.author.id);
+            return message.reply(response);
         }
         return message.reply('❌ Please ask a question after `1-we`\nExample: `1-we Salam alikom, labas?`');
     }
     
-    // ============================================
-    // AI \ia COMMAND HANDLER
-    // ============================================
+    // ========== AI \ia COMMAND ==========
     if (message.content.startsWith('\\ia')) {
         const args = message.content.slice(3).trim().split(/ +/);
         if (!args.length || !args[0]) {
@@ -537,25 +433,16 @@ client.on('messageCreate', async (message) => {
                     { name: 'Examples', value: '`\\ia Salam alikom, labas?`\n`\\ia How are you?`\n`\\ia Comment ça va?`\n`\\ia كيف حالك؟`', inline: false },
                     { name: 'Supported Languages', value: '🇲🇦 Darija • 🇸🇦 Arabic • 🇫🇷 French • 🇬🇧 English', inline: false }
                 )
-                .setFooter({ text: 'The AI will respond in the same language you use!' })
                 .setTimestamp();
             return message.reply({ embeds: [helpEmbed] });
         }
-        
         const question = args.join(' ');
-        try {
-            await message.channel.sendTyping();
-            const response = await aiSystem.generateResponse(question, message.author.id);
-            return message.reply(response);
-        } catch (error) {
-            console.error('AI Error:', error);
-            return message.reply('❌ Sorry, AI system encountered an error. Please try again.');
-        }
+        await message.channel.sendTyping();
+        const response = aiSystem.generateResponse(question, message.author.id);
+        return message.reply(response);
     }
     
-    // ============================================
-    // AI HELP COMMAND
-    // ============================================
+    // ========== AI HELP COMMAND ==========
     if (message.content === '!iahelp' || message.content === '!aihelp') {
         const stats = aiSystem.getStats();
         const embed = new EmbedBuilder()
@@ -565,25 +452,24 @@ client.on('messageCreate', async (message) => {
             .addFields(
                 { name: '📝 Commands', value: '`\\ia <message>` - Chat with AI\n`1-we <question>` - Quick AI response\n`!iahelp` - Show this help', inline: false },
                 { name: '🌍 Language Support', value: '🇲🇦 **Darija** (الدارجة)\n🇸🇦 **Arabic** (العربية)\n🇫🇷 **French** (Français)\n🇬🇧 **English**', inline: false },
-                { name: '💡 Examples', value: '`\\ia Salam alikom, labas?`\n`1-we شنو أخبارك؟`\n`\\ia Comment ça va aujourd'hui?`\n`\\ia What is your purpose?`', inline: false },
-                { name: '📊 Statistics', value: `Active users: ${stats.activeUsers}\n🗣️ Darija: ${stats.languages.darija} users\n📖 Arabic: ${stats.languages.arabic} users\n🇫🇷 French: ${stats.languages.french} users\n🇬🇧 English: ${stats.languages.english} users`, inline: true },
-                { name: '🧠 Features', value: '• Remembers conversation history\n• Auto-detects your language\n• Responds in same language\n• No API keys needed', inline: true }
+                { name: '💡 Examples', value: '`\\ia Salam alikom, labas?`\n`1-we شنو أخبارك؟`\n`\\ia Comment ça va aujourd'hui?`', inline: false },
+                { name: '📊 Statistics', value: `Active users: ${stats.activeUsers}\n🗣️ Darija: ${stats.languages.darija}\n📖 Arabic: ${stats.languages.arabic}\n🇫🇷 French: ${stats.languages.french}\n🇬🇧 English: ${stats.languages.english}`, inline: true }
             )
-            .setFooter({ text: 'AI remembers your last 10 messages per session (clears after 30min inactivity)' })
+            .setFooter({ text: 'AI remembers your language preference for 30 minutes' })
             .setTimestamp();
         return message.reply({ embeds: [embed] });
     }
     
-    // Skip command processing for non-command messages
+    // Skip non-command messages
     if (!message.content.startsWith('!')) return;
     
     const args = message.content.slice(1).trim().split(/ +/);
     const cmd = args.shift().toLowerCase();
     const { member, guild, channel } = message;
-
+    
     const modCmds = ['ban', 'kick', 'mute', 'unmute', 'warn', 'clear', 'lock', 'unlock', 'giverole', 'removerole', 'unban', 'ann', 'anni', 'ticketsetup', 'ticket', 'roltest', 'verif', 'sendpanel', 'verifstatus', 'resetverif', 'freegame', 'stopfreegame'];
     if (modCmds.includes(cmd) && !isMod(member)) return message.reply('❌ Permission denied!');
-
+    
     // HELP
     if (cmd === 'help') {
         const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('🛡️ Commands')
@@ -596,47 +482,35 @@ client.on('messageCreate', async (message) => {
                 { name: '📢 Announcements', value: '`!ann`, `!anni`', inline: false },
                 { name: '🎫 Ticket', value: '`!ticketsetup`, `!ticket`', inline: false },
                 { name: '🎭 Reaction Roles', value: '`!roltest`', inline: false },
-                { name: '✅ Verification', value: '`!verif`, `!sendpanel`, `!verifstatus`, `!resetverif`', inline: false },
-                { name: '💡 Other', value: '`!suggest`, `!giveaway`', inline: false }
+                { name: '✅ Verification', value: '`!verif`, `!sendpanel`, `!verifstatus`, `!resetverif`', inline: false }
             ).setTimestamp();
         return message.reply({ embeds: [embed] });
     }
-
+    
     // SERVER INFO
     if (cmd === 'serverinfo') {
         const total = guild.memberCount;
         const online = guild.members.cache.filter(m => m.presence?.status === 'online' || m.presence?.status === 'idle' || m.presence?.status === 'dnd').size;
         const voice = guild.members.cache.filter(m => m.voice.channel).size;
-        const boosting = guild.members.cache.filter(m => m.premiumSince).size;
         const boosts = guild.premiumSubscriptionCount || 0;
         const level = guild.premiumTier;
         const created = `<t:${Math.floor(guild.createdTimestamp / 1000)}:D>`;
-        
-        const embed = new EmbedBuilder()
-            .setColor(0x5865F2)
-            .setAuthor({ name: guild.name, iconURL: guild.iconURL() })
-            .setTitle(`📊 SERVER STATISTICS`)
-            .setThumbnail(guild.iconURL({ size: 1024 }))
+        const embed = new EmbedBuilder().setColor(0x5865F2).setAuthor({ name: guild.name, iconURL: guild.iconURL() })
+            .setTitle(`📊 SERVER STATISTICS`).setThumbnail(guild.iconURL({ size: 1024 }))
             .addFields(
-                { name: '👤 MEMBERS', value: `**${total.toLocaleString()}** Total Members`, inline: true },
-                { name: '🟢 ONLINE', value: `**${online}** Online Now`, inline: true },
+                { name: '👤 MEMBERS', value: `**${total.toLocaleString()}** Total`, inline: true },
+                { name: '🟢 ONLINE', value: `**${online}** Online`, inline: true },
                 { name: '🎤 VOICE', value: `**${voice}** In Voice`, inline: true },
-                { name: '🚀 BOOSTS', value: `**${boosts}** Total Boosts\nLevel **${level}**`, inline: true },
-                { name: '⭐ BOOSTING', value: `**${boosting}** Members Boosting`, inline: true },
+                { name: '🚀 BOOSTS', value: `**${boosts}** Boosts (Level ${level})`, inline: true },
                 { name: '📅 CREATED', value: `${created}`, inline: true }
-            )
-            .setFooter({ text: `Server ID: ${guild.id} • Requested by ${message.author.tag}` })
-            .setTimestamp();
-        
+            ).setTimestamp();
         await message.reply({ embeds: [embed] });
         return;
     }
-
+    
     // FREE GAMES
     if (cmd === 'freegame') {
-        if (activeFreeGameSessions.has(channel.id)) {
-            return message.reply('❌ Already running! Use `!stopfreegame`');
-        }
+        if (activeFreeGameSessions.has(channel.id)) return message.reply('❌ Already running!');
         await message.reply('🎮 Starting free games...');
         const game = await getRandomFreeGame();
         await sendFreeGameEmbed(channel, game);
@@ -645,7 +519,6 @@ client.on('messageCreate', async (message) => {
             await sendFreeGameEmbed(channel, newGame);
         }, 180000);
         activeFreeGameSessions.set(channel.id, interval);
-        await sendLog(guild, 'FREE GAMES STARTED', 'Channel', member.user, `Started in #${channel.name}`);
         return;
     }
     
@@ -655,20 +528,27 @@ client.on('messageCreate', async (message) => {
             clearInterval(interval);
             activeFreeGameSessions.delete(channel.id);
             message.reply('⏹️ Stopped.');
-            await sendLog(guild, 'FREE GAMES STOPPED', 'Channel', member.user, `Stopped in #${channel.name}`);
-        } else {
-            message.reply('❌ No active session.');
-        }
+        } else message.reply('❌ No active session.');
         return;
     }
-
+    
     // STATS
     if (cmd === 'info') {
         let target = member.user;
         if (args[0]) { try { target = await client.users.fetch(args[0]); } catch(e) { return message.reply('❌ User not found'); } }
-        await cmdInfo(message, target);
+        const stats = await getUserStats(target.id);
+        const allStats = await getAllStats();
+        const rank = allStats.findIndex(s => s.user_id === target.id) + 1 || allStats.length + 1;
+        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(`📊 ${target.tag}`).setThumbnail(target.displayAvatarURL())
+            .addFields(
+                { name: '📈 Level', value: `Level ${stats.level} | Rank #${rank}`, inline: true },
+                { name: '💬 Messages', value: `${stats.messages.toLocaleString()}`, inline: true },
+                { name: '🎤 Voice', value: `${formatVoiceTime(stats.voice_minutes)}`, inline: true }
+            ).setTimestamp();
+        await message.reply({ embeds: [embed] });
         return;
     }
+    
     if (cmd === 'rank') {
         let target = member.user;
         if (args[0]) { try { target = await client.users.fetch(args[0]); } catch(e) { return message.reply('❌ User not found'); } }
@@ -680,11 +560,11 @@ client.on('messageCreate', async (message) => {
         const bar = '█'.repeat(Math.floor(progress / 5)) + '░'.repeat(20 - Math.floor(progress / 5));
         const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(`🏆 ${target.tag} - #${rank}`)
             .setDescription(`**Level ${stats.level}**\n\`${bar}\` ${progress}%`)
-            .addFields({ name: 'XP', value: `${Math.floor(stats.xp)} / ${xpNeeded} XP`, inline: true })
-            .setTimestamp();
+            .addFields({ name: 'XP', value: `${Math.floor(stats.xp)} / ${xpNeeded} XP`, inline: true });
         await message.reply({ embeds: [embed] });
         return;
     }
+    
     if (cmd === 'top') {
         const type = args[0] === 'messages' ? 'messages' : (args[0] === 'voice' ? 'voice' : 'xp');
         const allStats = await getAllStats();
@@ -698,282 +578,155 @@ client.on('messageCreate', async (message) => {
         for (let i = 0; i < top10.length; i++) {
             const user = await client.users.fetch(top10[i].user_id).catch(() => null);
             const name = user ? user.username : 'Unknown';
-            if (type === 'xp') desc += `${i+1}. **${name}** - Lvl ${top10[i].level} (${Math.floor(top10[i].xp)} XP)\n`;
+            if (type === 'xp') desc += `${i+1}. **${name}** - Lvl ${top10[i].level}\n`;
             else if (type === 'messages') desc += `${i+1}. **${name}** - ${top10[i].messages.toLocaleString()} msgs\n`;
             else desc += `${i+1}. **${name}** - ${formatVoiceTime(top10[i].voice_minutes)}\n`;
         }
         const titles = { xp: 'XP', messages: 'Messages', voice: 'Voice' };
-        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(`🏆 ${titles[type]} Leaderboard`).setDescription(desc || 'No data').setTimestamp();
+        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(`🏆 ${titles[type]} Leaderboard`).setDescription(desc || 'No data');
         await message.reply({ embeds: [embed] });
         return;
     }
-    if (cmd === 'messages') {
-        let target = member.user;
-        if (args[0]) { try { target = await client.users.fetch(args[0]); } catch(e) { return message.reply('❌ User not found'); } }
-        const stats = await getUserStats(target.id);
-        const embed = new EmbedBuilder().setColor(0x57F287).setTitle(`💬 ${target.tag}'s Messages`).setDescription(`**Total:** ${stats.messages.toLocaleString()}`).setTimestamp();
-        await message.reply({ embeds: [embed] });
-        return;
-    }
-    if (cmd === 'voice') {
-        let target = member.user;
-        if (args[0]) { try { target = await client.users.fetch(args[0]); } catch(e) { return message.reply('❌ User not found'); } }
-        const stats = await getUserStats(target.id);
-        const h = Math.floor(stats.voice_minutes / 60);
-        const m = stats.voice_minutes % 60;
-        const embed = new EmbedBuilder().setColor(0xEB459E).setTitle(`🎤 ${target.tag}'s Voice`).setDescription(`**Total:** ${h}h ${m}m`).setTimestamp();
-        await message.reply({ embeds: [embed] });
-        return;
-    }
-
-    // VERIFICATION
-    if (cmd === 'verif') { await setupVerif(message); }
-    else if (cmd === 'resetverif') { db.run(`DELETE FROM verification_config WHERE guild_id = ?`, [guild.id]); message.reply('✅ Reset'); }
-    else if (cmd === 'sendpanel') { const cfg = await getVerif(guild.id); if (!cfg) return message.reply('❌ Not configured'); const ch = guild.channels.cache.get(cfg.channel); if (ch) await sendVerifPanel(ch); message.reply(`✅ Panel sent to ${ch}`); }
-    else if (cmd === 'verifstatus') { const cfg = await getVerif(guild.id); if (!cfg) return message.reply('❌ Not configured'); const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('Verification Status').addFields({ name: 'Auto Role', value: `<@&${cfg.auto_role}>`, inline: true }, { name: 'Verified Role', value: `<@&${cfg.verified_role}>`, inline: true }, { name: 'Channel', value: `<#${cfg.channel}>`, inline: true }); message.reply({ embeds: [embed] }); }
-
-    // TICKET
-    else if (cmd === 'ticketsetup') { await setupTicket(message); }
-    else if (cmd === 'ticket') { const cfg = await getTicketConfig(guild.id); if (!cfg) return message.reply('❌ Not configured'); const pc = guild.channels.cache.get(cfg.panel_channel); if (pc) await sendTicketPanel(pc, cfg); message.reply(`✅ Panel sent to ${pc}`); }
-
-    // REACTION ROLES
-    else if (cmd === 'roltest') { await setupRR(message); }
-
-    // MODERATION
-    else if (cmd === 'ban') {
-        const id = args[0];
-        if (!id) return message.reply('Usage: `!ban <id> [reason]`');
-        const target = await getMember(guild, id);
-        if (!target) return message.reply('❌ Not found');
-        const reason = args.slice(1).join(' ') || 'No reason';
-        await target.ban({ reason });
-        await message.reply(`✅ Banned ${target.user.tag}`);
-        await sendLog(guild, 'BAN', target.user, member.user, reason);
-    }
-    else if (cmd === 'kick') {
-        const id = args[0];
-        if (!id) return message.reply('Usage: `!kick <id> [reason]`');
-        const target = await getMember(guild, id);
-        if (!target) return message.reply('❌ Not found');
-        const reason = args.slice(1).join(' ') || 'No reason';
-        await target.kick(reason);
-        await message.reply(`✅ Kicked ${target.user.tag}`);
-        await sendLog(guild, 'KICK', target.user, member.user, reason);
-    }
-    else if (cmd === 'mute') {
-        const id = args[0], time = args[1];
-        if (!id || !time) return message.reply('Usage: `!mute <id> <time> [reason]`');
-        const target = await getMember(guild, id);
-        if (!target) return message.reply('❌ Not found');
-        const ms = parseTime(time);
-        if (!ms) return message.reply('❌ Invalid time');
-        const reason = args.slice(2).join(' ') || 'No reason';
-        await target.timeout(ms, reason);
-        await message.reply(`✅ Muted ${target.user.tag} for ${fmtTime(ms)}`);
-        await sendLog(guild, 'MUTE', target.user, member.user, reason);
-    }
-    else if (cmd === 'unmute') {
-        const id = args[0];
-        if (!id) return message.reply('Usage: `!unmute <id>`');
-        const target = await getMember(guild, id);
-        if (!target) return message.reply('❌ Not found');
-        await target.timeout(null);
-        await message.reply(`✅ Unmuted ${target.user.tag}`);
-        await sendLog(guild, 'UNMUTE', target.user, member.user, 'No reason');
-    }
-    else if (cmd === 'warn') {
-        const id = args[0];
-        if (!id) return message.reply('Usage: `!warn <id> [reason]`');
-        const target = await getMember(guild, id);
-        if (!target) return message.reply('❌ Not found');
-        const reason = args.slice(1).join(' ') || 'No reason';
-        await addWarning(target.id, guild.id, reason, member.user.tag);
-        const count = await getWarnCount(target.id, guild.id);
-        await message.reply(`✅ Warned ${target.user.tag} (Total: ${count})`);
-        await sendLog(guild, 'WARN', target.user, member.user, reason);
-    }
-    else if (cmd === 'clear') {
-        const amount = parseInt(args[0]);
-        if (!amount || amount < 1 || amount > 100) return message.reply('Usage: `!clear <1-100>`');
-        try {
-            const fetched = await channel.messages.fetch({ limit: amount });
-            const deleted = await channel.bulkDelete(fetched);
-            const reply = await message.reply(`✅ Deleted ${deleted.size} messages`);
-            setTimeout(() => reply.delete(), 3000);
-        } catch(e) { message.reply('❌ Failed'); }
-    }
-    else if (cmd === 'lock') { await channel.permissionOverwrites.edit(guild.id, { SendMessages: false }); message.reply('🔒 Locked'); }
-    else if (cmd === 'unlock') { await channel.permissionOverwrites.edit(guild.id, { SendMessages: null }); message.reply('🔓 Unlocked'); }
-    else if (cmd === 'giverole') {
-        const uid = args[0], rid = args[1];
-        if (!uid || !rid) return message.reply('Usage: `!giverole <id> <roleid>`');
-        const target = await getMember(guild, uid);
-        const role = guild.roles.cache.get(rid);
-        if (!target || !role) return message.reply('❌ Not found');
-        await target.roles.add(role);
-        await message.reply(`✅ Added ${role.name} to ${target.user.tag}`);
-    }
-    else if (cmd === 'removerole') {
-        const uid = args[0], rid = args[1];
-        if (!uid || !rid) return message.reply('Usage: `!removerole <id> <roleid>`');
-        const target = await getMember(guild, uid);
-        const role = guild.roles.cache.get(rid);
-        if (!target || !role) return message.reply('❌ Not found');
-        await target.roles.remove(role);
-        await message.reply(`✅ Removed ${role.name} from ${target.user.tag}`);
-    }
-    else if (cmd === 'unban') {
-        const uid = args[0];
-        if (!uid) return message.reply('Usage: `!unban <id>`');
-        try {
-            const user = await client.users.fetch(uid);
-            await guild.members.unban(user);
-            await message.reply(`✅ Unbanned ${user.tag}`);
-        } catch(e) { message.reply('❌ Not found'); }
-    }
-    else if (cmd === 'userinfo') {
-        const id = args[0];
-        const target = id ? await getMember(guild, id) : member;
+    
+    // Other commands (simplified versions)
+    if (cmd === 'userinfo') {
+        const target = args[0] ? await getMember(guild, args[0]) : member;
         if (!target) return message.reply('❌ Not found');
         const warns = await getWarnCount(target.id, guild.id);
         const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(target.user.tag).setThumbnail(target.user.displayAvatarURL())
-            .addFields({ name: 'ID', value: target.id, inline: true }, { name: 'Joined', value: `<t:${Math.floor(target.joinedTimestamp / 1000)}:R>`, inline: true }, { name: 'Warnings', value: `${warns}`, inline: true }).setTimestamp();
+            .addFields({ name: 'Joined', value: `<t:${Math.floor(target.joinedTimestamp / 1000)}:R>`, inline: true }, { name: 'Warnings', value: `${warns}`, inline: true });
         await message.reply({ embeds: [embed] });
+        return;
     }
-    else if (cmd === 'avatar') {
-        const id = args[0];
-        const user = id ? await client.users.fetch(id) : message.author;
-        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(`${user.tag}'s Avatar`).setImage(user.displayAvatarURL({ size: 1024 })).setTimestamp();
+    
+    if (cmd === 'avatar') {
+        const user = args[0] ? await client.users.fetch(args[0]) : message.author;
+        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(`${user.tag}'s Avatar`).setImage(user.displayAvatarURL({ size: 1024 }));
         await message.reply({ embeds: [embed] });
+        return;
     }
-    else if (cmd === 'ann') {
+    
+    if (cmd === 'ann') {
         const text = args.join(' ');
         if (!text) return message.reply('Usage: `!ann <message>`');
         await message.delete();
         await sendAnn(channel, text);
+        return;
     }
-    else if (cmd === 'anni') {
-        await message.delete();
-        await sendWelcome(channel);
-    }
-    else if (cmd === 'suggest') {
+    
+    if (cmd === 'suggest') {
         const sug = args.join(' ');
         if (!sug) return message.reply('Usage: `!suggest <message>`');
-        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('💡 Suggestion').setDescription(sug).setAuthor({ name: member.user.tag }).setTimestamp();
+        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('💡 Suggestion').setDescription(sug).setAuthor({ name: member.user.tag });
         const msg = await channel.send({ embeds: [embed] });
         await msg.react('✅'); await msg.react('❌');
-        db.run(`INSERT INTO suggestions (message_id, user_id, suggestion, date) VALUES (?, ?, ?, ?)`, [msg.id, member.user.id, sug, new Date().toISOString()]);
         await message.reply('✅ Submitted!');
+        return;
     }
-    else if (cmd === 'giveaway') {
-        const prize = args[0], duration = parseInt(args[1]), winners = parseInt(args[2]);
-        if (!prize || !duration || !winners) return message.reply('Usage: `!giveaway <prize> <minutes> <winners>`');
-        const end = Date.now() + (duration * 60000);
-        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('🎉 GIVEAWAY').setDescription(`**Prize:** ${prize}\n**Winners:** ${winners}\n**Duration:** ${duration}m`).setFooter({ text: 'React 🎉' }).setTimestamp(end);
-        const msg = await channel.send({ embeds: [embed] });
-        await msg.react('🎉');
-        db.run(`INSERT INTO giveaways (message_id, channel_id, prize, winners, end_time) VALUES (?, ?, ?, ?, ?)`, [msg.id, channel.id, prize, winners, end]);
-        setTimeout(async () => {
-            const fetched = await msg.fetch();
-            const reaction = fetched.reactions.cache.get('🎉');
-            let participants = reaction ? (await reaction.users.fetch()).filter(u => !u.bot) : [];
-            const selected = [];
-            for (let i = 0; i < Math.min(winners, participants.size); i++) {
-                const idx = Math.floor(Math.random() * participants.size);
-                selected.push([...participants][idx]);
-            }
-            const result = new EmbedBuilder().setColor(selected.length ? 0x22C55E : 0xEF4444).setTitle('🎉 GIVEAWAY ENDED')
-                .setDescription(`**Prize:** ${prize}\n**Winners:** ${selected.length ? selected.map(w => w.toString()).join(', ') : 'None'}`).setTimestamp();
-            await channel.send({ embeds: [result] });
-        }, duration * 60000);
-        await message.reply(`✅ Giveaway started for ${prize}!`);
+    
+    // Moderation commands
+    if (cmd === 'ban' && args[0]) {
+        const target = await getMember(guild, args[0]);
+        if (!target) return message.reply('❌ Not found');
+        const reason = args.slice(1).join(' ') || 'No reason';
+        await target.ban({ reason });
+        await message.reply(`✅ Banned ${target.user.tag}`);
+        return;
+    }
+    
+    if (cmd === 'kick' && args[0]) {
+        const target = await getMember(guild, args[0]);
+        if (!target) return message.reply('❌ Not found');
+        const reason = args.slice(1).join(' ') || 'No reason';
+        await target.kick(reason);
+        await message.reply(`✅ Kicked ${target.user.tag}`);
+        return;
+    }
+    
+    if (cmd === 'mute' && args[0] && args[1]) {
+        const target = await getMember(guild, args[0]);
+        if (!target) return message.reply('❌ Not found');
+        const ms = parseTime(args[1]);
+        if (!ms) return message.reply('❌ Invalid time');
+        const reason = args.slice(2).join(' ') || 'No reason';
+        await target.timeout(ms, reason);
+        await message.reply(`✅ Muted ${target.user.tag} for ${fmtTime(ms)}`);
+        return;
+    }
+    
+    if (cmd === 'unmute' && args[0]) {
+        const target = await getMember(guild, args[0]);
+        if (!target) return message.reply('❌ Not found');
+        await target.timeout(null);
+        await message.reply(`✅ Unmuted ${target.user.tag}`);
+        return;
+    }
+    
+    if (cmd === 'clear' && args[0]) {
+        const amount = parseInt(args[0]);
+        if (!amount || amount < 1 || amount > 100) return message.reply('Usage: `!clear <1-100>`');
+        const fetched = await channel.messages.fetch({ limit: amount });
+        const deleted = await channel.bulkDelete(fetched);
+        const reply = await message.reply(`✅ Deleted ${deleted.size} messages`);
+        setTimeout(() => reply.delete(), 3000);
+        return;
+    }
+    
+    if (cmd === 'lock') {
+        await channel.permissionOverwrites.edit(guild.id, { SendMessages: false });
+        message.reply('🔒 Locked');
+        return;
+    }
+    
+    if (cmd === 'unlock') {
+        await channel.permissionOverwrites.edit(guild.id, { SendMessages: null });
+        message.reply('🔓 Unlocked');
+        return;
+    }
+    
+    // Setup commands
+    if (cmd === 'ticketsetup') { await setupTicket(message); return; }
+    if (cmd === 'ticket') { 
+        const cfg = await getTicketConfig(guild.id);
+        if (!cfg) return message.reply('❌ Not configured');
+        const pc = guild.channels.cache.get(cfg.panel_channel);
+        if (pc) await sendTicketPanel(pc, cfg);
+        message.reply(`✅ Panel sent to ${pc}`);
+        return;
+    }
+    
+    if (cmd === 'roltest') { await setupRR(message); return; }
+    if (cmd === 'verif') { await setupVerif(message); return; }
+    if (cmd === 'sendpanel') {
+        const cfg = await getVerif(guild.id);
+        if (!cfg) return message.reply('❌ Not configured');
+        const ch = guild.channels.cache.get(cfg.channel);
+        if (ch) await sendVerifPanel(ch);
+        message.reply(`✅ Panel sent`);
+        return;
     }
 });
 
-// ============================================
-// ANTI-LINK HANDLER (Separate from command handler)
-// ============================================
+// Anti-link handler
 client.on('messageCreate', async (message) => {
-    if (message.author?.bot || !message.guild || message.webhookId) return;
+    if (message.author?.bot || !message.guild) return;
     if (message.content.startsWith('!') || message.content.startsWith('\\ia') || message.content.startsWith('1-we')) return;
-    
     if (isMod(message.member)) return;
-    
     if (LINK_REGEX.test(message.content)) {
-        try {
-            await message.delete();
-            console.log(`[ANTI-LINK] Deleted message from ${message.author.tag}`);
-        } catch (err) {
-            console.error(`[ANTI-LINK] Failed to delete: ${err.message}`);
-        }
-        
+        await message.delete().catch(() => {});
         const now = Date.now();
         const lastWarn = linkWarnCooldown.get(message.author.id);
-        
         if (!lastWarn || now - lastWarn > 10000) {
             linkWarnCooldown.set(message.author.id, now);
             setTimeout(() => linkWarnCooldown.delete(message.author.id), 10000);
-            
-            try {
-                const warnMsg = await message.channel.send(`${message.author} ry7 t9wd mra jaya`);
-                setTimeout(() => warnMsg.delete().catch(() => {}), 3000);
-            } catch (err) {}
-        }
-        
-        try {
-            await message.member.timeout(60000, `Sent a link: ${message.content.substring(0, 100)}`);
-            
-            if (LOG_CHANNEL_ID) {
-                const logChannel = message.guild.channels.cache.get(LOG_CHANNEL_ID);
-                if (logChannel) {
-                    const embed = new EmbedBuilder()
-                        .setColor(0xFF0000)
-                        .setTitle('🔗 Anti-Link Violation')
-                        .addFields(
-                            { name: 'User', value: message.author.tag, inline: true },
-                            { name: 'Channel', value: `<#${message.channel.id}>`, inline: true },
-                            { name: 'Content', value: message.content.substring(0, 200), inline: false },
-                            { name: 'Action', value: 'Timeout (1 minute)', inline: true }
-                        )
-                        .setTimestamp();
-                    await logChannel.send({ embeds: [embed] });
-                }
-            }
-        } catch (err) {}
-    }
-});
-
-client.on('messageUpdate', async (old, newMsg) => {
-    if (!newMsg.guild || newMsg.author?.bot) return;
-    if (newMsg.content?.startsWith('!') || newMsg.content?.startsWith('\\ia') || newMsg.content?.startsWith('1-we')) return;
-    if (isMod(newMsg.member)) return;
-    
-    const message = newMsg.partial ? await newMsg.fetch().catch(() => null) : newMsg;
-    if (!message || !message.content) return;
-    
-    if (LINK_REGEX.test(message.content)) {
-        await message.delete().catch(() => {});
-        
-        try {
             const warnMsg = await message.channel.send(`${message.author} ry7 t9wd mra jaya`);
             setTimeout(() => warnMsg.delete().catch(() => {}), 3000);
-        } catch (err) {}
-        
-        if (!message.member.isCommunicationDisabled()) {
-            await message.member.timeout(60000, "Edited message to add link").catch(() => {});
         }
+        await message.member.timeout(60000).catch(() => {});
     }
 });
 
-// ============================================
-// TRACKING
-// ============================================
-client.on('messageCreate', async (msg) => {
-    if (msg.author.bot || !msg.guild) return;
-    if (msg.content.startsWith('!') || msg.content.startsWith('\\ia') || msg.content.startsWith('1-we')) return;
-    updateMessageStats(msg.author.id, 1);
-});
-
+// Voice tracking
 client.on('voiceStateUpdate', async (old, neu) => {
     const uid = neu.member?.id || old.member?.id;
     if (!uid) return;
@@ -985,47 +738,34 @@ client.on('voiceStateUpdate', async (old, neu) => {
     }
 });
 
-client.on('messageDelete', async (msg) => {
-    if (!msg.guild || msg.author?.bot) return;
-    const ch = msg.guild.channels.cache.get(LOG_CHANNEL_ID);
-    if (!ch) return;
-    const embed = new EmbedBuilder().setColor(0xEF4444).setTitle('🗑️ Deleted').addFields(
-        { name: 'Author', value: msg.author?.tag || 'Unknown', inline: true },
-        { name: 'Channel', value: `<#${msg.channel.id}>`, inline: true },
-        { name: 'Content', value: msg.content?.slice(0, 500) || 'None', inline: false }
-    ).setTimestamp();
-    await ch.send({ embeds: [embed] });
+// Member join/leave
+client.on('guildMemberAdd', async (member) => {
+    await sendWelcome(member);
+    const vcfg = await getVerif(member.guild.id);
+    if (vcfg?.auto_role) await member.roles.add(vcfg.auto_role);
+    else if (AUTO_ROLE_ID) await member.roles.add(AUTO_ROLE_ID);
 });
 
-client.on('messageUpdate', async (old, neu) => {
-    if (!old.guild || old.author?.bot || old.content === neu.content) return;
-    const ch = old.guild.channels.cache.get(LOG_CHANNEL_ID);
-    if (!ch) return;
-    const embed = new EmbedBuilder().setColor(0x3B82F6).setTitle('✏️ Edited').addFields(
-        { name: 'Author', value: old.author?.tag || 'Unknown', inline: true },
-        { name: 'Channel', value: `<#${old.channel.id}>`, inline: true },
-        { name: 'Before', value: old.content?.slice(0, 500) || 'Empty', inline: false },
-        { name: 'After', value: neu.content?.slice(0, 500) || 'Empty', inline: false }
-    ).setTimestamp();
-    await ch.send({ embeds: [embed] });
+// Message stats
+client.on('messageCreate', async (msg) => {
+    if (msg.author.bot || !msg.guild) return;
+    if (msg.content.startsWith('!') || msg.content.startsWith('\\ia') || msg.content.startsWith('1-we')) return;
+    updateMessageStats(msg.author.id, 1);
 });
 
-// ============================================
-// BUTTONS
-// ============================================
+// Button interactions
 client.on('interactionCreate', async (interaction) => {
     if (!interaction.isButton()) return;
-
+    
     if (interaction.customId === 'verify_button') {
         const cfg = await getVerif(interaction.guild.id);
         if (!cfg) return interaction.reply({ content: '❌ Not configured', ephemeral: true });
-        try {
-            if (cfg.auto_role && interaction.member.roles.cache.has(cfg.auto_role)) await interaction.member.roles.remove(cfg.auto_role);
-            await interaction.member.roles.add(cfg.verified_role);
-            await interaction.reply({ embeds: [new EmbedBuilder().setColor(0x22C55E).setTitle('✅ Verified!').setDescription(`Welcome!`)], ephemeral: true });
-        } catch(e) { interaction.reply({ content: '❌ Failed', ephemeral: true }); }
+        if (cfg.auto_role && interaction.member.roles.cache.has(cfg.auto_role)) await interaction.member.roles.remove(cfg.auto_role);
+        await interaction.member.roles.add(cfg.verified_role);
+        await interaction.reply({ embeds: [new EmbedBuilder().setColor(0x22C55E).setTitle('✅ Verified!')], ephemeral: true });
     }
-    else if (interaction.customId === 'role_phone' || interaction.customId === 'role_pc') {
+    
+    if (interaction.customId === 'role_phone' || interaction.customId === 'role_pc') {
         const roles = await getRR(interaction.guild.id, interaction.message.id);
         const targetEmoji = interaction.customId === 'role_phone' ? '📱' : '💻';
         const role = roles.find(r => r.emoji === targetEmoji);
@@ -1038,7 +778,8 @@ client.on('interactionCreate', async (interaction) => {
             }
         }
     }
-    else if (interaction.customId === 'create_ticket') {
+    
+    if (interaction.customId === 'create_ticket') {
         const existing = await getTicket(interaction.user.id, interaction.guild.id);
         if (existing) return interaction.reply({ content: `❌ You have a ticket: <#${existing.channel_id}>`, ephemeral: true });
         const cfg = await getTicketConfig(interaction.guild.id);
@@ -1049,12 +790,12 @@ client.on('interactionCreate', async (interaction) => {
             parent: cfg.category,
             permissionOverwrites: [
                 { id: interaction.guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
-                { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory] },
-                ...(cfg.support_role ? [{ id: cfg.support_role, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory] }] : [])
+                { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
+                ...(cfg.support_role ? [{ id: cfg.support_role, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] }] : [])
             ]
         });
         saveTicket(interaction.user.id, ch.id, interaction.guild.id);
-        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('🎫 Ticket Created').setDescription('Support will help you soon.').setTimestamp();
+        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('🎫 Ticket Created');
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('close_ticket').setLabel('Close').setStyle(ButtonStyle.Danger),
             new ButtonBuilder().setCustomId('claim_ticket').setLabel('Claim').setStyle(ButtonStyle.Secondary)
@@ -1062,88 +803,27 @@ client.on('interactionCreate', async (interaction) => {
         await ch.send({ content: `${interaction.user}`, embeds: [embed], components: [row] });
         await interaction.reply({ content: `✅ Ticket: ${ch}`, ephemeral: true });
     }
-    else if (interaction.customId === 'close_ticket') {
+    
+    if (interaction.customId === 'close_ticket') {
         if (!isMod(interaction.member)) return interaction.reply({ content: '❌ No permission', ephemeral: true });
         await delTicket(interaction.user.id, interaction.guild.id);
         await interaction.reply('🔒 Closing...');
         setTimeout(() => interaction.channel.delete(), 3000);
     }
-    else if (interaction.customId === 'claim_ticket') {
-        if (!isMod(interaction.member)) return interaction.reply({ content: '❌ No permission', ephemeral: true });
-        await interaction.reply({ embeds: [new EmbedBuilder().setColor(0x22C55E).setTitle('🎫 Claimed').setDescription(`${interaction.user} claimed this ticket`)] });
-    }
 });
 
-// ============================================
-// SAVE VOICE TIME
-// ============================================
-async function saveAllVoiceTime() {
-    for (const [uid, startTime] of voiceStartTimes) {
-        const mins = Math.floor((Date.now() - startTime) / 60000);
-        if (mins > 0) await updateVoiceStats(uid, mins);
-    }
-}
-
-// ========== WELCOME MESSAGE ==========
-async function sendWelcome(member) {
-    const channel = member.guild.channels.cache.get(WELCOME_CHANNEL_ID);
-    if (!channel) return;
-    
-    const embed = new EmbedBuilder()
-        .setColor(0x5865F2)
-        .setTitle(`🎉 WELCOME TO ${member.guild.name.toUpperCase()} 🎉`)
-        .setDescription(`Hey ${member.toString()}! Welcome to the community! ✨\n\nWe're glad to have you here. Feel free to explore and have fun! 🚀`)
-        .setThumbnail(member.user.displayAvatarURL({ size: 1024, dynamic: true }))
-        .setImage('https://media.discordapp.net/attachments/1480969775344652470/1496647172148559983/BBCD65E5-E8A2-47BB-80A0-0A208431F3A6.png')
-        .setTimestamp()
-        .setFooter({ text: member.guild.name, iconURL: member.guild.iconURL() });
-    
-    await channel.send({ content: `${member.toString()}`, embeds: [embed] });
-}
-
-// ========== MEMBER JOIN EVENT ==========
-client.on('guildMemberAdd', async (member) => {
-    await sendWelcome(member);
-    
-    const logChannel = member.guild.channels.cache.get(LOG_CHANNEL_ID);
-    if (logChannel) {
-        const logEmbed = new EmbedBuilder().setColor(0x22C55E).setTitle('👋 Member Joined').setDescription(`${member.user.tag} joined`).setThumbnail(member.user.displayAvatarURL()).setTimestamp();
-        await logChannel.send({ embeds: [logEmbed] });
-    }
-    
-    const vcfg = await getVerif(member.guild.id);
-    if (vcfg?.auto_role) await member.roles.add(vcfg.auto_role);
-    else if (AUTO_ROLE_ID) await member.roles.add(AUTO_ROLE_ID);
-});
-
-client.on('guildMemberRemove', async (member) => {
-    const ch = member.guild.channels.cache.get(LOG_CHANNEL_ID);
-    if (!ch) return;
-    const embed = new EmbedBuilder().setColor(0xEF4444).setTitle('👋 Left').setDescription(`${member.user.tag} left`).setThumbnail(member.user.displayAvatarURL()).setTimestamp();
-    await ch.send({ embeds: [embed] });
-});
-
-// ============================================
-// READY
-// ============================================
+// Ready event
 client.once('ready', async () => {
     await loadSentGames();
-    console.log(`✅ ${client.user.tag} online!`);
-    console.log(`📋 Prefix: ! and \\ia`);
-    console.log(`🤖 AI Chat System Ready - Supports Darija, Arabic, French, English`);
-    console.log(`📝 Use: 1-we <question> or \\ia <message>`);
-    console.log(`🎮 Free games ready`);
-    console.log(`🔗 Anti-link system ACTIVE - Links will be deleted and users timed out`);
-    console.log(`📢 Welcome channel: ${WELCOME_CHANNEL_ID || 'Not set'}`);
-    console.log(`🎤 Voice channel: ${VOICE_CHANNEL_ID || 'Not set'}`);
+    console.log(`✅ ${client.user.tag} is online!`);
+    console.log(`🤖 AI Chat System Ready`);
+    console.log(`📝 Commands: 1-we <question> | \\ia <message> | !iahelp`);
+    console.log(`🌍 Languages: Darija, Arabic, French, English`);
     client.user.setActivity('1-we or \\ia', { type: 3 });
-    
     setTimeout(() => joinVoiceChannelProper(), 3000);
 });
 
-// ============================================
-// SHUTDOWN
-// ============================================
+// Shutdown
 async function gracefulShutdown() {
     await saveAllVoiceTime();
     for (const interval of activeFreeGameSessions.values()) clearInterval(interval);
