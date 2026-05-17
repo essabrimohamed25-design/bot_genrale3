@@ -403,34 +403,29 @@ async function saveAllVoiceTime() {
 }
 
 // ============================================
-// MAIN MESSAGE HANDLER
+// MAIN MESSAGE HANDLER - ALL COMMANDS USE ! PREFIX
 // ============================================
 client.on('messageCreate', async (message) => {
     // Ignore bots
     if (message.author.bot) return;
     
-    // ========== AI 1-we COMMAND ==========
-    if (message.content.toLowerCase().startsWith('1-we ')) {
-        const question = message.content.substring(5).trim();
-        if (question) {
-            await message.channel.sendTyping();
-            const response = aiSystem.generateResponse(question, message.author.id);
-            return message.reply(response);
-        }
-        return message.reply('❌ Please ask a question after `1-we`\nExample: `1-we Salam alikom, labas?`');
-    }
+    // Skip non-command messages
+    if (!message.content.startsWith('!')) return;
     
-    // ========== AI \ia COMMAND ==========
-    if (message.content.startsWith('\\ia')) {
-        const args = message.content.slice(3).trim().split(/ +/);
-        if (!args.length || !args[0]) {
+    const args = message.content.slice(1).trim().split(/ +/);
+    const cmd = args.shift().toLowerCase();
+    const { member, guild, channel } = message;
+    
+    // ========== AI COMMAND: !ai ==========
+    if (cmd === 'ai') {
+        if (!args.length) {
             const helpEmbed = new EmbedBuilder()
                 .setColor(0x5865F2)
                 .setTitle('🤖 AI Chat Command')
                 .setDescription('Chat with the AI assistant in multiple languages!')
                 .addFields(
-                    { name: 'Usage', value: '`\\ia <your message>`', inline: false },
-                    { name: 'Examples', value: '`\\ia Salam alikom, labas?`\n`\\ia How are you?`\n`\\ia Comment ca va?`\n`\\ia كيف حالك؟`', inline: false },
+                    { name: 'Usage', value: '`!ai <your message>`', inline: false },
+                    { name: 'Examples', value: '`!ai Salam alikom, labas?`\n`!ai How are you?`\n`!ai Comment ca va?`\n`!ai كيف حالك؟`', inline: false },
                     { name: 'Supported Languages', value: '🇲🇦 Darija • 🇸🇦 Arabic • 🇫🇷 French • 🇬🇧 English', inline: false }
                 )
                 .setTimestamp();
@@ -442,17 +437,28 @@ client.on('messageCreate', async (message) => {
         return message.reply(response);
     }
     
-    // ========== AI HELP COMMAND ==========
-    if (message.content === '!iahelp' || message.content === '!aihelp') {
+    // ========== AI COMMAND: !ask ==========
+    if (cmd === 'ask') {
+        if (!args.length) {
+            return message.reply('❌ Please provide a question!\nExample: `!ask What is the weather today?`');
+        }
+        const question = args.join(' ');
+        await message.channel.sendTyping();
+        const response = aiSystem.generateResponse(question, message.author.id);
+        return message.reply(response);
+    }
+    
+    // ========== AI HELP COMMAND: !iahelp ==========
+    if (cmd === 'iahelp' || cmd === 'aihelp') {
         const stats = aiSystem.getStats();
         const embed = new EmbedBuilder()
             .setColor(0x5865F2)
             .setTitle('🤖 AI Chat System - Help')
             .setDescription('Chat with the AI assistant! Supports multiple languages including Darija (Moroccan Arabic).')
             .addFields(
-                { name: '📝 Commands', value: '`\\ia <message>` - Chat with AI\n`1-we <question>` - Quick AI response\n`!iahelp` - Show this help', inline: false },
+                { name: '📝 Commands', value: '`!ai <message>` - Chat with AI\n`!ask <question>` - Ask a question\n`!iahelp` - Show this help', inline: false },
                 { name: '🌍 Language Support', value: '🇲🇦 **Darija** (الدارجة)\n🇸🇦 **Arabic** (العربية)\n🇫🇷 **French** (Français)\n🇬🇧 **English**', inline: false },
-                { name: '💡 Examples', value: '`\\ia Salam alikom, labas?`\n`1-we شنو أخبارك؟`\n`\\ia Comment ca va aujourd hui?`', inline: false },
+                { name: '💡 Examples', value: '`!ai Salam alikom, labas?`\n`!ask شنو أخبارك؟`\n`!ai Comment ca va aujourd hui?`\n`!ask What is your purpose?`', inline: false },
                 { name: '📊 Statistics', value: `Active users: ${stats.activeUsers}\n🗣️ Darija: ${stats.languages.darija}\n📖 Arabic: ${stats.languages.arabic}\n🇫🇷 French: ${stats.languages.french}\n🇬🇧 English: ${stats.languages.english}`, inline: true }
             )
             .setFooter({ text: 'AI remembers your language preference for 30 minutes' })
@@ -460,13 +466,7 @@ client.on('messageCreate', async (message) => {
         return message.reply({ embeds: [embed] });
     }
     
-    // Skip non-command messages
-    if (!message.content.startsWith('!')) return;
-    
-    const args = message.content.slice(1).trim().split(/ +/);
-    const cmd = args.shift().toLowerCase();
-    const { member, guild, channel } = message;
-    
+    // Moderation commands list
     const modCmds = ['ban', 'kick', 'mute', 'unmute', 'warn', 'clear', 'lock', 'unlock', 'giverole', 'removerole', 'unban', 'ann', 'anni', 'ticketsetup', 'ticket', 'roltest', 'verif', 'sendpanel', 'verifstatus', 'resetverif', 'freegame', 'stopfreegame'];
     if (modCmds.includes(cmd) && !isMod(member)) return message.reply('❌ Permission denied!');
     
@@ -475,7 +475,7 @@ client.on('messageCreate', async (message) => {
         const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('🛡️ Commands')
             .setDescription('**Moderation:** `!ban`, `!kick`, `!mute`, `!unmute`, `!warn`, `!clear`, `!lock`, `!unlock`, `!giverole`, `!removerole`, `!unban`')
             .addFields(
-                { name: '🤖 AI Chat', value: '`\\ia <message>` - Chat with AI\n`1-we <question>` - Quick AI\n`!iahelp` - AI help', inline: false },
+                { name: '🤖 AI Chat', value: '`!ai <message>` - Chat with AI\n`!ask <question>` - Ask AI\n`!iahelp` - AI help', inline: false },
                 { name: '🎮 Free Games', value: '`!freegame` - Start free games\n`!stopfreegame` - Stop', inline: false },
                 { name: 'ℹ️ Info', value: '`!userinfo`, `!serverinfo`, `!avatar`, `!info`', inline: false },
                 { name: '📊 Stats', value: '`!rank`, `!top`, `!messages`, `!voice`', inline: false },
@@ -588,13 +588,34 @@ client.on('messageCreate', async (message) => {
         return;
     }
     
+    if (cmd === 'messages') {
+        let target = member.user;
+        if (args[0]) { try { target = await client.users.fetch(args[0]); } catch(e) { return message.reply('❌ User not found'); } }
+        const stats = await getUserStats(target.id);
+        const embed = new EmbedBuilder().setColor(0x57F287).setTitle(`💬 ${target.tag}'s Messages`).setDescription(`**Total:** ${stats.messages.toLocaleString()}`);
+        await message.reply({ embeds: [embed] });
+        return;
+    }
+    
+    if (cmd === 'voice') {
+        let target = member.user;
+        if (args[0]) { try { target = await client.users.fetch(args[0]); } catch(e) { return message.reply('❌ User not found'); } }
+        const stats = await getUserStats(target.id);
+        const embed = new EmbedBuilder().setColor(0xEB459E).setTitle(`🎤 ${target.tag}'s Voice`).setDescription(`**Total:** ${formatVoiceTime(stats.voice_minutes)}`);
+        await message.reply({ embeds: [embed] });
+        return;
+    }
+    
     // Other commands
     if (cmd === 'userinfo') {
         const target = args[0] ? await getMember(guild, args[0]) : member;
         if (!target) return message.reply('❌ Not found');
         const warns = await getWarnCount(target.id, guild.id);
         const embed = new EmbedBuilder().setColor(0x5865F2).setTitle(target.user.tag).setThumbnail(target.user.displayAvatarURL())
-            .addFields({ name: 'Joined', value: `<t:${Math.floor(target.joinedTimestamp / 1000)}:R>`, inline: true }, { name: 'Warnings', value: `${warns}`, inline: true });
+            .addFields(
+                { name: 'Joined', value: `<t:${Math.floor(target.joinedTimestamp / 1000)}:R>`, inline: true },
+                { name: 'Warnings', value: `${warns}`, inline: true }
+            );
         await message.reply({ embeds: [embed] });
         return;
     }
@@ -662,6 +683,16 @@ client.on('messageCreate', async (message) => {
         return;
     }
     
+    if (cmd === 'warn' && args[0]) {
+        const target = await getMember(guild, args[0]);
+        if (!target) return message.reply('❌ Not found');
+        const reason = args.slice(1).join(' ') || 'No reason';
+        await addWarning(target.id, guild.id, reason, member.user.tag);
+        const count = await getWarnCount(target.id, guild.id);
+        await message.reply(`✅ Warned ${target.user.tag} (Total: ${count})`);
+        return;
+    }
+    
     if (cmd === 'clear' && args[0]) {
         const amount = parseInt(args[0]);
         if (!amount || amount < 1 || amount > 100) return message.reply('Usage: `!clear <1-100>`');
@@ -710,6 +741,34 @@ client.on('messageCreate', async (message) => {
         return;
     }
     
+    if (cmd === 'giveaway' && args[0] && args[1] && args[2]) {
+        const prize = args[0];
+        const duration = parseInt(args[1]);
+        const winners = parseInt(args[2]);
+        const end = Date.now() + (duration * 60000);
+        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('🎉 GIVEAWAY')
+            .setDescription(`**Prize:** ${prize}\n**Winners:** ${winners}\n**Duration:** ${duration}m`)
+            .setFooter({ text: 'React 🎉' }).setTimestamp(end);
+        const msg = await channel.send({ embeds: [embed] });
+        await msg.react('🎉');
+        db.run(`INSERT INTO giveaways (message_id, channel_id, prize, winners, end_time) VALUES (?, ?, ?, ?, ?)`, [msg.id, channel.id, prize, winners, end]);
+        setTimeout(async () => {
+            const fetched = await msg.fetch();
+            const reaction = fetched.reactions.cache.get('🎉');
+            let participants = reaction ? (await reaction.users.fetch()).filter(u => !u.bot) : [];
+            const selected = [];
+            for (let i = 0; i < Math.min(winners, participants.size); i++) {
+                const idx = Math.floor(Math.random() * participants.size);
+                selected.push([...participants][idx]);
+            }
+            const result = new EmbedBuilder().setColor(selected.length ? 0x22C55E : 0xEF4444).setTitle('🎉 GIVEAWAY ENDED')
+                .setDescription(`**Prize:** ${prize}\n**Winners:** ${selected.length ? selected.map(w => w.toString()).join(', ') : 'None'}`);
+            await channel.send({ embeds: [result] });
+        }, duration * 60000);
+        await message.reply(`✅ Giveaway started for ${prize}!`);
+        return;
+    }
+    
     // Setup commands
     if (cmd === 'ticketsetup') { await setupTicket(message); return; }
     if (cmd === 'ticket') { 
@@ -720,7 +779,6 @@ client.on('messageCreate', async (message) => {
         message.reply(`✅ Panel sent to ${pc}`);
         return;
     }
-    
     if (cmd === 'roltest') { await setupRR(message); return; }
     if (cmd === 'verif') { await setupVerif(message); return; }
     if (cmd === 'sendpanel') {
@@ -753,48 +811,12 @@ client.on('messageCreate', async (message) => {
         await sendWelcome(channel);
         return;
     }
-    if (cmd === 'warn' && args[0]) {
-        const target = await getMember(guild, args[0]);
-        if (!target) return message.reply('❌ Not found');
-        const reason = args.slice(1).join(' ') || 'No reason';
-        await addWarning(target.id, guild.id, reason, member.user.tag);
-        const count = await getWarnCount(target.id, guild.id);
-        await message.reply(`✅ Warned ${target.user.tag} (Total: ${count})`);
-        return;
-    }
-    if (cmd === 'giveaway' && args[0] && args[1] && args[2]) {
-        const prize = args[0];
-        const duration = parseInt(args[1]);
-        const winners = parseInt(args[2]);
-        const end = Date.now() + (duration * 60000);
-        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('🎉 GIVEAWAY')
-            .setDescription(`**Prize:** ${prize}\n**Winners:** ${winners}\n**Duration:** ${duration}m`)
-            .setFooter({ text: 'React 🎉' }).setTimestamp(end);
-        const msg = await channel.send({ embeds: [embed] });
-        await msg.react('🎉');
-        db.run(`INSERT INTO giveaways (message_id, channel_id, prize, winners, end_time) VALUES (?, ?, ?, ?, ?)`, [msg.id, channel.id, prize, winners, end]);
-        setTimeout(async () => {
-            const fetched = await msg.fetch();
-            const reaction = fetched.reactions.cache.get('🎉');
-            let participants = reaction ? (await reaction.users.fetch()).filter(u => !u.bot) : [];
-            const selected = [];
-            for (let i = 0; i < Math.min(winners, participants.size); i++) {
-                const idx = Math.floor(Math.random() * participants.size);
-                selected.push([...participants][idx]);
-            }
-            const result = new EmbedBuilder().setColor(selected.length ? 0x22C55E : 0xEF4444).setTitle('🎉 GIVEAWAY ENDED')
-                .setDescription(`**Prize:** ${prize}\n**Winners:** ${selected.length ? selected.map(w => w.toString()).join(', ') : 'None'}`);
-            await channel.send({ embeds: [result] });
-        }, duration * 60000);
-        await message.reply(`✅ Giveaway started for ${prize}!`);
-        return;
-    }
 });
 
 // Anti-link handler
 client.on('messageCreate', async (message) => {
     if (message.author?.bot || !message.guild) return;
-    if (message.content.startsWith('!') || message.content.startsWith('\\ia') || message.content.startsWith('1-we')) return;
+    if (message.content.startsWith('!')) return;
     if (isMod(message.member)) return;
     if (LINK_REGEX.test(message.content)) {
         await message.delete().catch(() => {});
@@ -833,7 +855,7 @@ client.on('guildMemberAdd', async (member) => {
 // Message stats
 client.on('messageCreate', async (msg) => {
     if (msg.author.bot || !msg.guild) return;
-    if (msg.content.startsWith('!') || msg.content.startsWith('\\ia') || msg.content.startsWith('1-we')) return;
+    if (msg.content.startsWith('!')) return;
     updateMessageStats(msg.author.id, 1);
 });
 
@@ -906,9 +928,9 @@ client.once('ready', async () => {
     await loadSentGames();
     console.log(`✅ ${client.user.tag} is online!`);
     console.log(`🤖 AI Chat System Ready`);
-    console.log(`📝 Commands: 1-we <question> | \\ia <message> | !iahelp`);
+    console.log(`📝 AI Commands: !ai <message> | !ask <question> | !iahelp`);
     console.log(`🌍 Languages: Darija, Arabic, French, English`);
-    client.user.setActivity('1-we or \\ia', { type: 3 });
+    client.user.setActivity('!ai or !ask', { type: 3 });
     setTimeout(() => joinVoiceChannelProper(), 3000);
 });
 
