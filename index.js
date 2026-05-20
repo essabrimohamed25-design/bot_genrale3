@@ -16,7 +16,6 @@ const db = new sqlite3.Database('./bot_data.db');
 db.serialize(() => {
     db.run(`CREATE TABLE IF NOT EXISTS warnings (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, guild_id TEXT, reason TEXT, moderator TEXT, date TEXT)`);
     db.run(`CREATE TABLE IF NOT EXISTS suggestions (id INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT, user_id TEXT, suggestion TEXT, date TEXT)`);
-    db.run(`CREATE TABLE IF NOT EXISTS giveaways (id INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT, channel_id TEXT, prize TEXT, winners INTEGER, end_time INTEGER)`);
     db.run(`CREATE TABLE IF NOT EXISTS tickets (user_id TEXT, channel_id TEXT, guild_id TEXT, created_at TEXT, PRIMARY KEY (user_id, guild_id))`);
     db.run(`CREATE TABLE IF NOT EXISTS ticket_config (guild_id TEXT PRIMARY KEY, panel_channel TEXT, category TEXT, log_channel TEXT, support_role TEXT)`);
     db.run(`CREATE TABLE IF NOT EXISTS reaction_roles (guild_id TEXT, message_id TEXT, channel_id TEXT, emoji TEXT, role_id TEXT)`);
@@ -24,8 +23,8 @@ db.serialize(() => {
     db.run(`CREATE TABLE IF NOT EXISTS user_stats (user_id TEXT PRIMARY KEY, messages INTEGER DEFAULT 0, voice_minutes INTEGER DEFAULT 0, xp INTEGER DEFAULT 0, level INTEGER DEFAULT 1)`);
     db.run(`CREATE TABLE IF NOT EXISTS free_games_sent (id INTEGER PRIMARY KEY AUTOINCREMENT, game_id TEXT UNIQUE, sent_at TEXT)`);
     
-    // Add new tables for enhanced giveaway system
-    db.run(`CREATE TABLE IF NOT EXISTS enhanced_giveaways (
+    // Giveaway table (simplified)
+    db.run(`CREATE TABLE IF NOT EXISTS giveaways (
         id TEXT PRIMARY KEY,
         message_id TEXT,
         channel_id TEXT,
@@ -33,14 +32,10 @@ db.serialize(() => {
         winners INTEGER,
         end_time INTEGER,
         hosted_by TEXT,
-        requirements TEXT,
-        ended INTEGER DEFAULT 0,
-        drawn INTEGER DEFAULT 0,
-        rerolled_at TEXT,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        ended INTEGER DEFAULT 0
     )`);
     
-    // ========== NEW: Auto Voice System Table ==========
+    // Auto Voice System table
     db.run(`CREATE TABLE IF NOT EXISTS auto_voice (
         guild_id TEXT,
         user_id TEXT,
@@ -77,8 +72,8 @@ const activeFreeGameSessions = new Map();
 const sentGamesCache = new Set();
 const linkWarnCooldown = new Map();
 
-// ========== NEW: Auto Voice System Variables ==========
-const autoVoiceEnabled = new Map(); // Cache for enabled auto voice per user
+// Auto Voice System cache
+const autoVoiceCache = new Map();
 
 // Free games list
 const FREE_STEAM_GAMES = [
@@ -287,7 +282,7 @@ function getVerif(gid) { return new Promise((r) => { db.get(`SELECT * FROM verif
 
 async function sendVerifPanel(ch) {
     const cfg = await getVerif(ch.guild.id);
-    if (!cfg) return ch.send('❌ Not configured! Use `!verif`');
+    if (!cfg) return ch.send('❌ Not configured! Use `-verif`');
     const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('✅ VERIFY').setDescription(`Welcome to ${ch.guild.name}!\nClick below to verify.`)
         .setImage(cfg.image_url).setThumbnail(ch.guild.iconURL()).setTimestamp();
     const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('verify_button').setLabel('Verify').setEmoji('✅').setStyle(ButtonStyle.Success));
@@ -316,7 +311,7 @@ async function setupTicket(msg) {
         else {
             coll.stop();
             saveTicketConfig(msg.guild.id, cfg.panel_channel, cfg.category, cfg.log_channel, cfg.support_role);
-            await m.reply('✅ Ticket system configured! Use `!ticket`');
+            await m.reply('✅ Ticket system configured! Use `-ticket`');
         }
     });
 }
@@ -408,45 +403,50 @@ async function joinVoiceChannelProper() {
     }
 }
 
-// ========== NEW: Auto Voice System Functions ==========
+// ========== AUTO VOICE SYSTEM FUNCTIONS ==========
 
-// Add auto voice for user
 async function addAutoVoice(guildId, userId, channelId) {
     return new Promise((resolve) => {
         db.run(`INSERT OR REPLACE INTO auto_voice (guild_id, user_id, channel_id) VALUES (?, ?, ?)`, 
-            [guildId, userId, channelId], () => {
-            autoVoiceEnabled.set(`${guildId}-${userId}`, channelId);
-            resolve();
-        });
+            [guildId, userId, channelId], (err) => {
+                if (!err) {
+                    autoVoiceCache.set(`${guildId}-${userId}`, channelId);
+                }
+                resolve();
+            });
     });
 }
 
-// Remove auto voice for user
 async function removeAutoVoice(guildId, userId) {
     return new Promise((resolve) => {
         db.run(`DELETE FROM auto_voice WHERE guild_id = ? AND user_id = ?`, 
-            [guildId, userId], () => {
-            autoVoiceEnabled.delete(`${guildId}-${userId}`);
-            resolve();
-        });
+            [guildId, userId], (err) => {
+                if (!err) {
+                    autoVoiceCache.delete(`${guildId}-${userId}`);
+                }
+                resolve();
+            });
     });
 }
 
-// Get auto voice for user
 async function getAutoVoice(guildId, userId) {
     return new Promise((resolve) => {
-        const cached = autoVoiceEnabled.get(`${guildId}-${userId}`);
-        if (cached) return resolve({ channel_id: cached });
+        const cached = autoVoiceCache.get(`${guildId}-${userId}`);
+        if (cached) {
+            resolve({ channel_id: cached });
+            return;
+        }
         
         db.get(`SELECT channel_id FROM auto_voice WHERE guild_id = ? AND user_id = ?`, 
             [guildId, userId], (err, row) => {
-            if (row) autoVoiceEnabled.set(`${guildId}-${userId}`, row.channel_id);
-            resolve(row);
-        });
+                if (row && !err) {
+                    autoVoiceCache.set(`${guildId}-${userId}`, row.channel_id);
+                }
+                resolve(row);
+            });
     });
 }
 
-// Create personal voice channel
 async function createPersonalVoiceChannel(member, triggerChannel) {
     const category = triggerChannel.parent;
     const channelName = `${member.displayName}'s VC`;
@@ -468,7 +468,6 @@ async function createPersonalVoiceChannel(member, triggerChannel) {
             ]
         });
         
-        // Move user to new channel
         await member.voice.setChannel(newChannel);
         return newChannel;
     } catch (error) {
@@ -477,23 +476,23 @@ async function createPersonalVoiceChannel(member, triggerChannel) {
     }
 }
 
-// Send voice control panel
-async function sendVoiceControlPanel(channel, targetChannelId) {
-    const targetChannel = channel.guild.channels.cache.get(targetChannelId);
-    if (!targetChannel) {
-        return channel.send('❌ Invalid voice channel ID!');
+async function sendVoiceControlPanel(textChannel, voiceChannelId) {
+    const voiceChannel = textChannel.guild.channels.cache.get(voiceChannelId);
+    if (!voiceChannel || voiceChannel.type !== ChannelType.GuildVoice) {
+        return textChannel.send('❌ Invalid voice channel ID! Please provide a valid voice channel ID.');
     }
     
-    const userSetting = await getAutoVoice(channel.guild.id, channel.author.id);
-    const isEnabled = userSetting && userSetting.channel_id === targetChannelId;
+    const userSetting = await getAutoVoice(textChannel.guild.id, textChannel.author.id);
+    const isEnabled = userSetting && userSetting.channel_id === voiceChannelId;
     
     const embed = new EmbedBuilder()
         .setColor(isEnabled ? 0x22C55E : 0x5865F2)
-        .setTitle('🎤 Auto Voice Control Panel')
-        .setDescription(`Configure auto-voice for **${targetChannel.name}**`)
+        .setTitle('🎤 Voice Control Panel')
+        .setDescription(`Configure auto-voice for **${voiceChannel.name}**`)
         .addFields(
-            { name: 'Status', value: isEnabled ? '✅ **ENABLED**' : '❌ **DISABLED**', inline: true },
-            { name: 'How it works', value: 'When enabled, joining this channel will automatically create a personal voice channel named after you!\n\nThe personal channel will auto-delete when empty.', inline: false }
+            { name: '📊 Status', value: isEnabled ? '✅ **ENABLED**' : '❌ **DISABLED**', inline: true },
+            { name: '🎯 Voice Channel', value: `${voiceChannel.name} (${voiceChannelId})`, inline: true },
+            { name: 'ℹ️ How it works', value: 'When enabled, joining this voice channel will automatically create a personal voice channel named after you!\n\nThe personal channel will auto-delete when empty.', inline: false }
         )
         .setFooter({ text: 'Click the button below to toggle auto-voice' })
         .setTimestamp();
@@ -501,13 +500,13 @@ async function sendVoiceControlPanel(channel, targetChannelId) {
     const row = new ActionRowBuilder()
         .addComponents(
             new ButtonBuilder()
-                .setCustomId(`voice_toggle_${targetChannelId}`)
-                .setLabel(isEnabled ? 'Disable Auto-Voice' : 'Enable Auto-Voice')
+                .setCustomId(`voice_toggle_${voiceChannelId}`)
+                .setLabel(isEnabled ? '🔴 Disable Auto-Voice' : '🟢 Enable Auto-Voice')
                 .setStyle(isEnabled ? ButtonStyle.Danger : ButtonStyle.Success)
                 .setEmoji(isEnabled ? '🔴' : '🟢')
         );
     
-    await channel.send({ embeds: [embed], components: [row] });
+    await textChannel.send({ embeds: [embed], components: [row] });
 }
 
 // Welcome message
@@ -533,143 +532,117 @@ async function saveAllVoiceTime() {
 }
 
 // ============================================
-// ENHANCED GIVEAWAY SYSTEM
+// SIMPLIFIED GIVEAWAY SYSTEM
 // ============================================
 
-// Store active giveaways in memory for faster access
-const activeGiveaways = new Map();
+// Store active giveaway timeouts
+const activeGiveawayTimeouts = new Map();
 
-// Giveaway manager class
-class GiveawayManager {
-    constructor(db, client) {
-        this.db = db;
-        this.client = client;
-        this.checkInterval = null;
-        this.startChecker();
-    }
+async function createGiveaway(channel, winners, durationMs, prize, hostedBy) {
+    const endTime = Date.now() + durationMs;
+    const giveawayId = `${channel.id}-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+    
+    const embed = new EmbedBuilder()
+        .setColor(0xFF69B4)
+        .setTitle('🎉 GIVEAWAY 🎉')
+        .setDescription(
+            `**Prize:** ${prize}\n` +
+            `**Winners:** ${winners}\n` +
+            `**Hosted by:** ${hostedBy}\n` +
+            `\nReact with 🎉 to enter!\n` +
+            `**Ends:** <t:${Math.floor(endTime / 1000)}:R> (<t:${Math.floor(endTime / 1000)}:F>)`
+        )
+        .setFooter({ text: `Giveaway ID: ${giveawayId.substring(0, 10)}` })
+        .setTimestamp(endTime);
 
-    startChecker() {
-        this.checkInterval = setInterval(() => this.checkEndedGiveaways(), 10000);
-    }
+    const message = await channel.send({ embeds: [embed] });
+    await message.react('🎉');
 
-    async checkEndedGiveaways() {
-        const now = Date.now();
-        const giveaways = await this.getActiveGiveaways();
-        
-        for (const giveaway of giveaways) {
-            if (giveaway.end_time <= now && !giveaway.ended) {
-                await this.endGiveaway(giveaway.id);
+    // Save to database
+    await new Promise((resolve) => {
+        db.run(
+            `INSERT INTO giveaways (id, message_id, channel_id, prize, winners, end_time, hosted_by, ended) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
+            [giveawayId, message.id, channel.id, prize, winners, endTime, hostedBy],
+            (err) => {
+                if (err) console.error('Error saving giveaway:', err);
+                resolve();
             }
-        }
+        );
+    });
+
+    // Schedule end
+    const timeout = setTimeout(() => endGiveaway(giveawayId), durationMs);
+    activeGiveawayTimeouts.set(giveawayId, timeout);
+
+    return giveawayId;
+}
+
+async function endGiveaway(giveawayId) {
+    // Clear timeout if exists
+    if (activeGiveawayTimeouts.has(giveawayId)) {
+        clearTimeout(activeGiveawayTimeouts.get(giveawayId));
+        activeGiveawayTimeouts.delete(giveawayId);
     }
 
-    async getActiveGiveaways() {
-        return new Promise((resolve) => {
-            this.db.all(`SELECT * FROM enhanced_giveaways WHERE ended = 0 OR ended IS NULL`, [], (err, rows) => {
-                resolve(rows || []);
-            });
-        });
-    }
+    return new Promise((resolve) => {
+        db.get(`SELECT * FROM giveaways WHERE id = ? AND ended = 0`, [giveawayId], async (err, giveaway) => {
+            if (err || !giveaway) {
+                resolve(null);
+                return;
+            }
 
-    async createGiveaway(channel, prize, duration, winners, hostedBy, requirements = null) {
-        const endTime = Date.now() + duration;
-        
-        const embed = new EmbedBuilder()
-            .setColor(0xFF69B4)
-            .setTitle('🎉 GIVEAWAY 🎉')
-            .setDescription(
-                `**Prize:** ${prize}\n` +
-                `**Winners:** ${winners}\n` +
-                `**Hosted by:** ${hostedBy}\n` +
-                `${requirements ? `**Requirements:** ${requirements}\n` : ''}` +
-                `\nReact with 🎉 to enter!\n` +
-                `**Ends:** <t:${Math.floor(endTime / 1000)}:R> (<t:${Math.floor(endTime / 1000)}:F>)`
-            )
-            .setFooter({ text: `Giveaway ID: ${Date.now()}`, iconURL: this.client.user.displayAvatarURL() })
-            .setTimestamp(endTime)
-            .setThumbnail(this.client.user.displayAvatarURL());
+            const channel = client.channels.cache.get(giveaway.channel_id);
+            if (!channel) {
+                db.run(`UPDATE giveaways SET ended = 1 WHERE id = ?`, [giveawayId]);
+                resolve(null);
+                return;
+            }
 
-        const message = await channel.send({ embeds: [embed] });
-        await message.react('🎉');
-
-        const giveawayId = `${channel.id}-${message.id}`;
-        await new Promise((resolve) => {
-            this.db.run(
-                `INSERT INTO enhanced_giveaways (id, message_id, channel_id, prize, winners, end_time, hosted_by, requirements, ended, drawn) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
-                [giveawayId, message.id, channel.id, prize, winners, endTime, hostedBy, requirements || null],
-                resolve
-            );
-        });
-
-        activeGiveaways.set(giveawayId, {
-            messageId: message.id,
-            channelId: channel.id,
-            prize,
-            winners,
-            endTime,
-            hostedBy,
-            requirements,
-            ended: false
-        });
-
-        return giveawayId;
-    }
-
-    async endGiveaway(giveawayId, force = false) {
-        return new Promise(async (resolve) => {
-            this.db.get(`SELECT * FROM enhanced_giveaways WHERE id = ?`, [giveawayId], async (err, giveaway) => {
-                if (!giveaway || giveaway.ended) {
-                    resolve(null);
-                    return;
-                }
-
-                const channel = this.client.channels.cache.get(giveaway.channel_id);
-                if (!channel) {
-                    resolve(null);
-                    return;
-                }
-
+            try {
+                let message = null;
                 try {
-                    const message = await channel.messages.fetch(giveaway.message_id);
+                    message = await channel.messages.fetch(giveaway.message_id);
+                } catch (fetchError) {
+                    console.log(`Giveaway message not found, marking as ended`);
+                    db.run(`UPDATE giveaways SET ended = 1 WHERE id = ?`, [giveawayId]);
+                    resolve(null);
+                    return;
+                }
+                
+                // Get participants from reactions
+                let participants = [];
+                try {
                     const reaction = message.reactions.cache.get('🎉');
-                    
-                    let participants = [];
                     if (reaction) {
                         const users = await reaction.users.fetch();
                         participants = users.filter(user => !user.bot);
                     }
+                } catch (reactionError) {
+                    console.error('Error fetching reactions:', reactionError.message);
+                }
 
-                    const winnerCount = Math.min(giveaway.winners, participants.length);
-                    const winners = [];
-                    
-                    if (winnerCount > 0 && participants.length > 0) {
-                        const shuffled = [...participants];
-                        for (let i = shuffled.length - 1; i > 0; i--) {
-                            const j = Math.floor(Math.random() * (i + 1));
-                            [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-                        }
-                        
-                        for (let i = 0; i < winnerCount; i++) {
-                            winners.push(shuffled[i]);
-                        }
+                // Pick winners
+                const winners = [];
+                const participantList = [...participants];
+                
+                if (participantList.length > 0) {
+                    const shuffled = [...participantList];
+                    for (let i = shuffled.length - 1; i > 0; i--) {
+                        const j = Math.floor(Math.random() * (i + 1));
+                        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
                     }
+                    
+                    for (let i = 0; i < Math.min(giveaway.winners, shuffled.length); i++) {
+                        winners.push(shuffled[i]);
+                    }
+                }
 
-                    this.db.run(`UPDATE enhanced_giveaways SET ended = 1, drawn = 1 WHERE id = ?`, [giveawayId]);
-                    activeGiveaways.delete(giveawayId);
+                // Update database
+                db.run(`UPDATE giveaways SET ended = 1 WHERE id = ?`, [giveawayId]);
 
-                    const resultEmbed = new EmbedBuilder()
-                        .setColor(winners.length > 0 ? 0x22C55E : 0xEF4444)
-                        .setTitle(winners.length > 0 ? '🎉 GIVEAWAY ENDED - WINNERS 🎉' : '🎉 GIVEAWAY ENDED - NO WINNERS 🎉')
-                        .setDescription(
-                            `**Prize:** ${giveaway.prize}\n` +
-                            `**Total Entries:** ${participants.length}\n` +
-                            `**Winners:** ${giveaway.winners}\n` +
-                            (winners.length > 0 ? `\n**🏆 Winners:**\n${winners.map(w => `${w.toString()}`).join('\n')}` : '\n❌ **No valid participants!**')
-                        )
-                        .setFooter({ text: `Giveaway ID: ${giveawayId}` })
-                        .setTimestamp();
-
+                // Update original message
+                try {
                     const updatedEmbed = EmbedBuilder.from(message.embeds[0])
                         .setColor(0x808080)
                         .setDescription(
@@ -677,121 +650,75 @@ class GiveawayManager {
                             `\n\n**❌ GIVEAWAY ENDED ❌**\n` +
                             (winners.length > 0 ? `**Winners:** ${winners.map(w => w.toString()).join(', ')}` : '**No winners were selected**')
                         );
-
                     await message.edit({ embeds: [updatedEmbed] });
-                    await channel.send({ embeds: [resultEmbed] });
-
-                    const logChannel = channel.guild.channels.cache.get(LOG_CHANNEL_ID);
-                    if (logChannel) {
-                        const logEmbed = new EmbedBuilder()
-                            .setColor(0xFF69B4)
-                            .setTitle('📋 GIVEAWAY ENDED')
-                            .addFields(
-                                { name: 'Prize', value: giveaway.prize, inline: true },
-                                { name: 'Winners', value: winners.length.toString(), inline: true },
-                                { name: 'Channel', value: `<#${giveaway.channel_id}>`, inline: true }
-                            )
-                            .setTimestamp();
-                        await logChannel.send({ embeds: [logEmbed] });
-                    }
-
-                    resolve(winners);
-                } catch (error) {
-                    console.error(`Error ending giveaway ${giveawayId}:`, error);
-                    resolve(null);
-                }
-            });
-        });
-    }
-
-    async rerollGiveaway(giveawayId) {
-        return new Promise(async (resolve) => {
-            this.db.get(`SELECT * FROM enhanced_giveaways WHERE id = ?`, [giveawayId], async (err, giveaway) => {
-                if (!giveaway) {
-                    resolve({ error: 'Giveaway not found!' });
-                    return;
+                } catch (editError) {
+                    console.log(`Could not edit giveaway message:`, editError.message);
                 }
 
-                const channel = this.client.channels.cache.get(giveaway.channel_id);
-                if (!channel) {
-                    resolve({ error: 'Channel not found!' });
-                    return;
-                }
+                // Send results
+                const resultEmbed = new EmbedBuilder()
+                    .setColor(winners.length > 0 ? 0x22C55E : 0xEF4444)
+                    .setTitle(winners.length > 0 ? '🎉 GIVEAWAY ENDED - WINNERS 🎉' : '🎉 GIVEAWAY ENDED - NO WINNERS 🎉')
+                    .setDescription(
+                        `**Prize:** ${giveaway.prize}\n` +
+                        `**Total Entries:** ${participantList.length}\n` +
+                        `**Winners:** ${giveaway.winners}\n` +
+                        (winners.length > 0 ? `\n**🏆 Winners:**\n${winners.map(w => `${w.toString()}`).join('\n')}` : '\n❌ **No valid participants!**')
+                    )
+                    .setTimestamp();
 
-                try {
-                    const message = await channel.messages.fetch(giveaway.message_id);
-                    const reaction = message.reactions.cache.get('🎉');
-                    
-                    let participants = [];
-                    if (reaction) {
-                        const users = await reaction.users.fetch();
-                        participants = users.filter(user => !user.bot);
-                    }
+                await channel.send({ embeds: [resultEmbed] });
 
-                    if (participants.length === 0) {
-                        resolve({ error: 'No valid participants to reroll from!' });
-                        return;
-                    }
-
-                    const newWinners = [];
-                    const shuffled = [...participants];
-                    for (let i = shuffled.length - 1; i > 0; i--) {
-                        const j = Math.floor(Math.random() * (i + 1));
-                        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-                    }
-                    
-                    for (let i = 0; i < Math.min(giveaway.winners, shuffled.length); i++) {
-                        newWinners.push(shuffled[i]);
-                    }
-
-                    const rerollEmbed = new EmbedBuilder()
-                        .setColor(0x22C55E)
-                        .setTitle('🎉 GIVEAWAY REROLL 🎉')
-                        .setDescription(
-                            `**Prize:** ${giveaway.prize}\n` +
-                            `**New Winners:**\n${newWinners.map(w => w.toString()).join('\n')}`
+                // Log to mod channel
+                const logChannel = client.channels.cache.get(LOG_CHANNEL_ID);
+                if (logChannel) {
+                    const logEmbed = new EmbedBuilder()
+                        .setColor(0xFF69B4)
+                        .setTitle('📋 GIVEAWAY ENDED')
+                        .addFields(
+                            { name: 'Prize', value: giveaway.prize, inline: true },
+                            { name: 'Winners', value: winners.length.toString(), inline: true },
+                            { name: 'Channel', value: `<#${giveaway.channel_id}>`, inline: true }
                         )
                         .setTimestamp();
-
-                    await channel.send({ embeds: [rerollEmbed] });
-                    
-                    this.db.run(`UPDATE enhanced_giveaways SET rerolled_at = ? WHERE id = ?`, [new Date().toISOString(), giveawayId]);
-                    resolve({ winners: newWinners });
-                } catch (error) {
-                    console.error(`Error rerolling giveaway ${giveawayId}:`, error);
-                    resolve({ error: 'Failed to reroll giveaway!' });
+                    await logChannel.send({ embeds: [logEmbed] });
                 }
-            });
-        });
-    }
 
-    async listGiveaways(guildId) {
-        return new Promise((resolve) => {
-            this.db.all(`SELECT * FROM enhanced_giveaways WHERE ended = 0`, [], (err, rows) => {
-                resolve(rows || []);
-            });
+                resolve(winners);
+            } catch (error) {
+                console.error(`Error ending giveaway:`, error.message);
+                db.run(`UPDATE giveaways SET ended = 1 WHERE id = ?`, [giveawayId]);
+                resolve(null);
+            }
         });
-    }
+    });
 }
 
-// Initialize giveaway manager
-const giveawayManager = new GiveawayManager(db, client);
+// Clean up expired giveaways on startup
+async function cleanupExpiredGiveaways() {
+    const now = Date.now();
+    db.all(`SELECT id FROM giveaways WHERE ended = 0 AND end_time <= ?`, [now], async (err, rows) => {
+        if (err || !rows) return;
+        for (const row of rows) {
+            await endGiveaway(row.id);
+            await new Promise(r => setTimeout(r, 1000));
+        }
+        console.log(`🧹 Cleaned up ${rows.length} expired giveaways`);
+    });
+}
 
 // ============================================
-// MAIN MESSAGE HANDLER - ALL COMMANDS USE - PREFIX (CHANGED FROM !)
+// MAIN MESSAGE HANDLER - PREFIX: -
 // ============================================
 client.on('messageCreate', async (message) => {
-    // Ignore bots
     if (message.author.bot) return;
-    
-    // Skip non-command messages
     if (!message.content.startsWith('-')) return;
     
     const args = message.content.slice(1).trim().split(/ +/);
     const cmd = args.shift().toLowerCase();
     const { member, guild, channel } = message;
     
-    // ========== AI COMMAND: -ai ==========
+    // ========== AI COMMANDS ==========
     if (cmd === 'ai') {
         if (!args.length) {
             const helpEmbed = new EmbedBuilder()
@@ -800,7 +727,7 @@ client.on('messageCreate', async (message) => {
                 .setDescription('Chat with the AI assistant naturally!')
                 .addFields(
                     { name: 'Usage', value: '`-ai <your message>`', inline: false },
-                    { name: 'Examples', value: '`-ai slm`\n`-ai labas?\n`-ai كيف حالك؟`\n`-ai Comment ca va?`\n`-ai How are you?`', inline: false },
+                    { name: 'Examples', value: '`-ai slm`\n`-ai labas?`\n`-ai كيف حالك؟`', inline: false },
                     { name: 'Supported Languages', value: '🇲🇦 Darija • 🇸🇦 Arabic • 🇫🇷 French • 🇬🇧 English', inline: false }
                 )
                 .setTimestamp();
@@ -812,7 +739,6 @@ client.on('messageCreate', async (message) => {
         return message.reply(response);
     }
     
-    // ========== AI COMMAND: -ask ==========
     if (cmd === 'ask') {
         if (!args.length) {
             return message.reply('❌ Please provide a question!\nExample: `-ask chno had lhaja?`');
@@ -823,36 +749,33 @@ client.on('messageCreate', async (message) => {
         return message.reply(response);
     }
     
-    // ========== AI HELP COMMAND: -iahelp ==========
     if (cmd === 'iahelp' || cmd === 'aihelp') {
         const stats = aiSystem.getStats();
         const embed = new EmbedBuilder()
             .setColor(0x5865F2)
-            .setTitle('🤖 AI Chat System - Natural Conversations')
-            .setDescription('Chat with the AI assistant that speaks naturally like a real person!')
+            .setTitle('🤖 AI Chat System')
+            .setDescription('Chat naturally with the AI assistant!')
             .addFields(
-                { name: '📝 Commands', value: '`-ai <message>` - Chat naturally\n`-ask <question>` - Ask anything\n`-iahelp` - Show this help', inline: false },
-                { name: '🌍 Language Support', value: '🇲🇦 **Darija** (الدارجة) - Natural Moroccan Arabic\n🇸🇦 **Arabic** (العربية)\n🇫🇷 **French** (Français)\n🇬🇧 **English**', inline: false },
-                { name: '💡 Examples', value: '`-ai slm` - Bot replies: wa 3lykom slm\n`-ai labas?` - Bot replies naturally\n`-ask chno hadchi?` - Ask anything in Darija', inline: false },
-                { name: '📊 Statistics', value: `Active users: ${stats.activeUsers}\n🗣️ Darija: ${stats.languages.darija}\n📖 Arabic: ${stats.languages.arabic}\n🇫🇷 French: ${stats.languages.french}\n🇬🇧 English: ${stats.languages.english}`, inline: true }
+                { name: '📝 Commands', value: '`-ai <message>` - Chat naturally\n`-ask <question>` - Ask anything\n`-iahelp` - Show help', inline: false },
+                { name: '🌍 Language Support', value: '🇲🇦 Darija • 🇸🇦 Arabic • 🇫🇷 French • 🇬🇧 English', inline: false },
+                { name: '📊 Statistics', value: `Active users: ${stats.activeUsers}`, inline: true }
             )
-            .setFooter({ text: 'The AI responds naturally in your language!' })
             .setTimestamp();
         return message.reply({ embeds: [embed] });
     }
     
-    // ========== NEW: AUTO VOICE COMMANDS ==========
+    // ========== AUTO VOICE COMMANDS ==========
     
-    // -voice add <channel_id>
+    // -voice add <voice_channel_id>
     if (cmd === 'voice' && args[0] === 'add') {
         const channelId = args[1];
         if (!channelId) {
-            return message.reply('❌ Usage: `-voice add <channel_id>`\nExample: `-voice add 123456789012345678`');
+            return message.reply('❌ Usage: `-voice add <voice_channel_id>`\nExample: `-voice add 123456789012345678`');
         }
         
         const voiceChannel = guild.channels.cache.get(channelId);
         if (!voiceChannel || voiceChannel.type !== ChannelType.GuildVoice) {
-            return message.reply('❌ Invalid voice channel ID! Make sure it\'s a voice channel.');
+            return message.reply('❌ Invalid voice channel ID! Please provide a valid voice channel ID.');
         }
         
         await addAutoVoice(guild.id, message.author.id, channelId);
@@ -861,251 +784,172 @@ client.on('messageCreate', async (message) => {
             .setTitle('✅ Auto-Voice Enabled')
             .setDescription(`You will now auto-create a personal voice channel when joining **${voiceChannel.name}**!`)
             .addFields(
-                { name: 'How it works', value: 'When you join that channel, a personal VC named after you will be created automatically.', inline: false },
+                { name: 'How it works', value: 'When you join that voice channel, a personal VC named after you will be created automatically.', inline: false },
                 { name: 'Auto-Delete', value: 'Your personal VC will delete itself when empty.', inline: false },
-                { name: 'Control Panel', value: 'Use `-control ' + channelId + '` to manage this setting.', inline: false }
+                { name: 'Control Panel', value: 'Use `-cn ' + channelId + '` in a text channel to manage this setting.', inline: false }
             )
             .setTimestamp();
         return message.reply({ embeds: [embed] });
     }
     
-    // -control <channel_id>
-    if (cmd === 'control') {
-        const channelId = args[0];
-        if (!channelId) {
-            return message.reply('❌ Usage: `-control <channel_id>`\nExample: `-control 123456789012345678`\n\nUse `-voice add <channel_id>` first to enable auto-voice!');
+    // -cn <voice_channel_id> - Send control panel to current text channel
+    if (cmd === 'cn') {
+        const voiceChannelId = args[0];
+        if (!voiceChannelId) {
+            return message.reply('❌ Usage: `-cn <voice_channel_id>`\nExample: `-cn 123456789012345678`\n\nThis will send the voice control panel to this text channel.');
         }
         
-        const voiceChannel = guild.channels.cache.get(channelId);
-        if (!voiceChannel || voiceChannel.type !== ChannelType.GuildVoice) {
-            return message.reply('❌ Invalid voice channel ID! Please provide a valid voice channel ID.');
-        }
-        
-        await sendVoiceControlPanel(message, channelId);
+        await sendVoiceControlPanel(message, voiceChannelId);
         return;
     }
     
-    // ========== NEW GIVEAWAY COMMANDS (Using - prefix) ==========
-    
-    // Start interactive giveaway
-    if (cmd === 'giveaway' || cmd === 'gstart') {
+    // ========== SIMPLIFIED GIVEAWAY COMMAND ==========
+    // -gv <winners> <time> <prize>
+    if (cmd === 'gv') {
         if (!isMod(message.member)) return message.reply('❌ Permission denied!');
         
-        const filter = (m) => m.author.id === message.author.id;
-        let step = 0;
-        const giveawayData = {};
-        
-        const questions = [
-            '📝 **Enter the giveaway prize:**\nExample: `Nitro Classic` or `$50 Steam Gift Card`',
-            '⏰ **Enter the duration:**\nExample: `10m`, `2h`, `1d`\n(Use m=minutes, h=hours, d=days)',
-            '👥 **How many winners?**\nEnter a number between 1 and 25',
-            '📢 **Which channel to host the giveaway?**\nMention the channel or enter channel ID',
-            '🎯 **Any requirements?** (Optional)\nType `skip` to skip this step'
-        ];
-        
-        await message.reply('🎉 **GIVEAWAY SETUP** 🎉\n' + questions[0]);
-        
-        const collector = message.channel.createMessageCollector({ filter, time: 120000, max: 5 });
-        
-        collector.on('collect', async (m) => {
-            let response = m.content.trim();
-            
-            if (step === 0) {
-                giveawayData.prize = response;
-                await m.reply(questions[1]);
-            } else if (step === 1) {
-                const duration = parseTime(response);
-                if (!duration) {
-                    await m.reply('❌ Invalid duration! Use format like `10m`, `2h`, `1d`');
-                    return;
-                }
-                giveawayData.duration = duration;
-                await m.reply(questions[2]);
-            } else if (step === 2) {
-                const winners = parseInt(response);
-                if (isNaN(winners) || winners < 1 || winners > 25) {
-                    await m.reply('❌ Invalid number! Please enter a number between 1 and 25');
-                    return;
-                }
-                giveawayData.winners = winners;
-                await m.reply(questions[3]);
-            } else if (step === 3) {
-                let channel = null;
-                const channelMatch = response.match(/<#(\d+)>/);
-                if (channelMatch) {
-                    channel = message.guild.channels.cache.get(channelMatch[1]);
-                } else {
-                    channel = message.guild.channels.cache.get(response);
-                }
-                
-                if (!channel || channel.type !== ChannelType.GuildText) {
-                    await m.reply('❌ Invalid channel! Please mention a valid text channel.');
-                    return;
-                }
-                giveawayData.channel = channel;
-                await m.reply(questions[4]);
-            } else if (step === 4) {
-                if (response.toLowerCase() !== 'skip') {
-                    giveawayData.requirements = response;
-                }
-                collector.stop();
-                
-                const giveawayId = await giveawayManager.createGiveaway(
-                    giveawayData.channel,
-                    giveawayData.prize,
-                    giveawayData.duration,
-                    giveawayData.winners,
-                    message.author.toString(),
-                    giveawayData.requirements
-                );
-                
-                const confirmEmbed = new EmbedBuilder()
-                    .setColor(0x22C55E)
-                    .setTitle('✅ GIVEAWAY CREATED!')
-                    .setDescription(
-                        `**Prize:** ${giveawayData.prize}\n` +
-                        `**Channel:** ${giveawayData.channel}\n` +
-                        `**Duration:** ${fmtTime(giveawayData.duration)}\n` +
-                        `**Winners:** ${giveawayData.winners}\n` +
-                        `${giveawayData.requirements ? `**Requirements:** ${giveawayData.requirements}\n` : ''}` +
-                        `**Giveaway ID:** \`${giveawayId}\``
-                    )
-                    .setTimestamp();
-                
-                await message.reply({ embeds: [confirmEmbed] });
-            }
-            step++;
-        });
-        
-        collector.on('end', (collected) => {
-            if (collected.size < 4) {
-                message.reply('❌ Giveaway setup cancelled due to timeout!');
-            }
-        });
-        return;
-    }
-    
-    // End giveaway command
-    if (cmd === 'giveaway-end' || cmd === 'gend') {
-        if (!isMod(message.member)) return message.reply('❌ Permission denied!');
-        
-        const giveawayId = args[0];
-        if (!giveawayId) {
-            const activeGiveawaysList = await giveawayManager.getActiveGiveaways();
-            if (activeGiveawaysList.length === 0) {
-                return message.reply('❌ No active giveaways found!');
-            }
-            
-            const listEmbed = new EmbedBuilder()
-                .setColor(0xFF69B4)
-                .setTitle('📋 ACTIVE GIVEAWAYS')
-                .setDescription(activeGiveawaysList.map(g => 
-                    `**ID:** \`${g.id}\`\n**Prize:** ${g.prize}\n**Winners:** ${g.winners}\n**Channel:** <#${g.channel_id}>\n`
-                ).join('\n') || 'No active giveaways')
-                .setTimestamp();
-            
-            return message.reply({ embeds: [listEmbed] });
+        if (args.length < 3) {
+            return message.reply('❌ Usage: `-gv <winners> <time> <prize>`\n\nExamples:\n`-gv 2 10m Nitro`\n`-gv 1 1h Steam Gift Card`\n`-gv 5 30d Discord Nitro`\n\nTime format: `s` (seconds), `m` (minutes), `h` (hours), `d` (days)');
         }
         
-        await message.reply(`🎉 Ending giveaway \`${giveawayId}\`...`);
-        const result = await giveawayManager.endGiveaway(giveawayId, true);
-        
-        if (!result) {
-            await message.reply('❌ Failed to end giveaway! Make sure the ID is correct.');
-        } else {
-            await message.reply(`✅ Giveaway ended successfully! ${result.length || 0} winner(s) announced.`);
-        }
-        return;
-    }
-    
-    // Reroll giveaway command
-    if (cmd === 'giveaway-reroll' || cmd === 'greroll') {
-        if (!isMod(message.member)) return message.reply('❌ Permission denied!');
-        
-        const giveawayId = args[0];
-        if (!giveawayId) {
-            return message.reply('❌ Please provide a giveaway ID!\nUsage: `-greroll <giveaway_id>`');
+        const winners = parseInt(args[0]);
+        if (isNaN(winners) || winners < 1 || winners > 25) {
+            return message.reply('❌ Winners must be a number between 1 and 25!');
         }
         
-        await message.reply(`🎲 Rerolling giveaway \`${giveawayId}\`...`);
-        const result = await giveawayManager.rerollGiveaway(giveawayId);
-        
-        if (result.error) {
-            await message.reply(`❌ ${result.error}`);
-        } else {
-            await message.reply(`✅ Giveaway rerolled successfully! ${result.winners.length} new winner(s) announced.`);
-        }
-        return;
-    }
-    
-    // List active giveaways
-    if (cmd === 'giveaway-list' || cmd === 'glist') {
-        const activeGiveawaysList = await giveawayManager.getActiveGiveaways();
-        
-        if (activeGiveawaysList.length === 0) {
-            return message.reply('❌ No active giveaways at the moment!');
+        const durationStr = args[1];
+        const durationMs = parseTime(durationStr);
+        if (!durationMs) {
+            return message.reply('❌ Invalid time format! Use: `10s`, `5m`, `2h`, `1d`');
         }
         
-        const embed = new EmbedBuilder()
+        const prize = args.slice(2).join(' ');
+        if (!prize || prize.length < 1) {
+            return message.reply('❌ Please provide a prize name!');
+        }
+        
+        // Confirm with user
+        const confirmEmbed = new EmbedBuilder()
             .setColor(0xFF69B4)
-            .setTitle('🎉 ACTIVE GIVEAWAYS 🎉')
-            .setDescription(activeGiveawaysList.map((g, i) => {
-                const timeLeft = g.end_time - Date.now();
-                return `${i+1}. **${g.prize}**\n   • Winners: ${g.winners}\n   • Channel: <#${g.channel_id}>\n   • Ends: <t:${Math.floor(g.end_time / 1000)}:R>\n   • ID: \`${g.id}\``;
-            }).join('\n\n'))
-            .setFooter({ text: `Total: ${activeGiveawaysList.length} active giveaways` })
+            .setTitle('🎉 Create Giveaway?')
+            .setDescription(
+                `**Prize:** ${prize}\n` +
+                `**Winners:** ${winners}\n` +
+                `**Duration:** ${fmtTime(durationMs)}\n` +
+                `**Channel:** ${channel}\n\n` +
+                `Click ✅ to confirm or ❌ to cancel.`
+            )
             .setTimestamp();
         
-        await message.reply({ embeds: [embed] });
+        const row = new ActionRowBuilder()
+            .addComponents(
+                new ButtonBuilder().setCustomId('confirm_giveaway').setLabel('✅ Confirm').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId('cancel_giveaway').setLabel('❌ Cancel').setStyle(ButtonStyle.Danger)
+            );
+        
+        const confirmMsg = await message.reply({ embeds: [confirmEmbed], components: [row] });
+        
+        const filter = (i) => i.user.id === message.author.id;
+        const collector = confirmMsg.createMessageComponentCollector({ filter, time: 30000, max: 1 });
+        
+        collector.on('collect', async (interaction) => {
+            if (interaction.customId === 'confirm_giveaway') {
+                await interaction.deferUpdate();
+                await confirmMsg.delete().catch(() => {});
+                
+                const giveawayId = await createGiveaway(channel, winners, durationMs, prize, message.author.toString());
+                const successEmbed = new EmbedBuilder()
+                    .setColor(0x22C55E)
+                    .setTitle('✅ Giveaway Created!')
+                    .setDescription(`Giveaway created successfully in ${channel}!\nID: \`${giveawayId.substring(0, 10)}\``)
+                    .setTimestamp();
+                await message.reply({ embeds: [successEmbed] });
+            } else {
+                await interaction.deferUpdate();
+                await confirmMsg.delete().catch(() => {});
+                await message.reply('❌ Giveaway cancelled.');
+            }
+        });
+        
+        collector.on('end', async (collected) => {
+            if (collected.size === 0) {
+                await confirmMsg.delete().catch(() => {});
+                await message.reply('❌ Giveaway creation timed out.');
+            }
+        });
+        
         return;
     }
     
-    // Quick giveaway command
-    if (cmd === 'giveaway-quick' || cmd === 'gquick') {
+    // Helper command to show active giveaways
+    if (cmd === 'giveaways' || cmd === 'glist') {
         if (!isMod(message.member)) return message.reply('❌ Permission denied!');
         
-        const channelMatch = args[0]?.match(/<#(\d+)>/) || (args[0] ? { 1: args[0] } : null);
-        if (!channelMatch) return message.reply('❌ Usage: `-gquick #channel 10m 3 "Prize name"`');
-        
-        const channel = message.guild.channels.cache.get(channelMatch[1]);
-        if (!channel) return message.reply('❌ Invalid channel!');
-        
-        const duration = parseTime(args[1]);
-        if (!duration) return message.reply('❌ Invalid duration! Use format like `10m`, `2h`, `1d`');
-        
-        const winners = parseInt(args[2]);
-        if (isNaN(winners) || winners < 1 || winners > 25) return message.reply('❌ Invalid winners count! Must be between 1-25');
-        
-        const prize = args.slice(3).join(' ');
-        if (!prize) return message.reply('❌ Please provide a prize name!');
-        
-        const giveawayId = await giveawayManager.createGiveaway(
-            channel, prize, duration, winners, message.author.toString(), null
-        );
-        
-        await message.reply(`✅ Quick giveaway created in ${channel}! ID: \`${giveawayId}\``);
+        db.all(`SELECT * FROM giveaways WHERE ended = 0`, [], async (err, rows) => {
+            if (err || !rows || rows.length === 0) {
+                return message.reply('❌ No active giveaways!');
+            }
+            
+            const embed = new EmbedBuilder()
+                .setColor(0xFF69B4)
+                .setTitle('🎉 Active Giveaways')
+                .setDescription(rows.map(g => {
+                    const timeLeft = g.end_time - Date.now();
+                    return `**${g.prize}**\n• Winners: ${g.winners}\n• Ends: ${fmtTime(timeLeft)} left\n• ID: \`${g.id.substring(0, 10)}\``;
+                }).join('\n\n'))
+                .setTimestamp();
+            
+            await message.reply({ embeds: [embed] });
+        });
         return;
     }
     
-    // Moderation commands list
+    // Helper command to end giveaway manually
+    if (cmd === 'gend') {
+        if (!isMod(message.member)) return message.reply('❌ Permission denied!');
+        
+        const giveawayId = args[0];
+        if (!giveawayId) {
+            return message.reply('❌ Usage: `-gend <giveaway_id>`\nUse `-giveaways` to see active giveaway IDs.');
+        }
+        
+        // Find giveaway by partial ID
+        db.all(`SELECT * FROM giveaways WHERE ended = 0 AND id LIKE ?`, [`%${giveawayId}%`], async (err, rows) => {
+            if (err || !rows || rows.length === 0) {
+                return message.reply('❌ Giveaway not found!');
+            }
+            
+            if (rows.length > 1) {
+                return message.reply(`❌ Multiple giveaways found! Please be more specific:\n${rows.map(r => `• ${r.id.substring(0, 10)} - ${r.prize}`).join('\n')}`);
+            }
+            
+            await message.reply(`🎉 Ending giveaway for **${rows[0].prize}**...`);
+            await endGiveaway(rows[0].id);
+            await message.reply(`✅ Giveaway ended!`);
+        });
+        return;
+    }
+    
+    // ========== MODERATION COMMANDS ==========
     const modCmds = ['ban', 'kick', 'mute', 'unmute', 'warn', 'clear', 'lock', 'unlock', 'giverole', 'removerole', 'unban', 'ann', 'anni', 'ticketsetup', 'ticket', 'roltest', 'verif', 'sendpanel', 'verifstatus', 'resetverif', 'freegame', 'stopfreegame'];
     if (modCmds.includes(cmd) && !isMod(member)) return message.reply('❌ Permission denied!');
     
-    // HELP (Updated to use - prefix)
+    // HELP
     if (cmd === 'help') {
         const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('🛡️ Commands')
-            .setDescription('**Moderation:** `-ban`, `-kick`, `-mute`, `-unmute`, `-warn`, `-clear`, `-lock`, `-unlock`, `-giverole`, `-removerole`, `-unban`')
+            .setDescription('**Prefix:** `-`')
             .addFields(
-                { name: '🎤 Auto Voice System', value: '`-voice add <channel_id>` - Enable auto personal VC\n`-control <channel_id>` - Open control panel', inline: false },
+                { name: '🎤 Auto Voice System', value: '`-voice add <channel_id>` - Enable auto personal VC\n`-cn <channel_id>` - Send control panel', inline: false },
                 { name: '🤖 AI Chat', value: '`-ai <message>` - Chat naturally\n`-ask <question>` - Ask AI\n`-iahelp` - AI help', inline: false },
+                { name: '🎉 Giveaways', value: '`-gv <winners> <time> <prize>` - Create giveaway\n`-giveaways` - List active giveaways\n`-gend <id>` - End giveaway', inline: false },
                 { name: '🎮 Free Games', value: '`-freegame` - Start free games\n`-stopfreegame` - Stop', inline: false },
-                { name: '🎉 Giveaways', value: '`-giveaway` - Interactive giveaway setup\n`-gstart` - Same as -giveaway\n`-gend <id>` - End a giveaway\n`-greroll <id>` - Reroll winners\n`-glist` - List active giveaways\n`-gquick #channel 10m 3 "Prize"` - Quick giveaway', inline: false },
                 { name: 'ℹ️ Info', value: '`-userinfo`, `-serverinfo`, `-avatar`, `-info`', inline: false },
                 { name: '📊 Stats', value: '`-rank`, `-top`, `-messages`, `-voice`', inline: false },
                 { name: '📢 Announcements', value: '`-ann`, `-anni`', inline: false },
                 { name: '🎫 Ticket', value: '`-ticketsetup`, `-ticket`', inline: false },
                 { name: '🎭 Reaction Roles', value: '`-roltest`', inline: false },
-                { name: '✅ Verification', value: '`-verif`, `-sendpanel`, `-verifstatus`, `-resetverif`', inline: false }
+                { name: '✅ Verification', value: '`-verif`, `-sendpanel`, `-verifstatus`, `-resetverif`', inline: false },
+                { name: '🛡️ Moderation', value: '`-ban`, `-kick`, `-mute`, `-unmute`, `-warn`, `-clear`, `-lock`, `-unlock`, `-giverole`, `-removerole`, `-unban`', inline: false }
             ).setTimestamp();
         return message.reply({ embeds: [embed] });
     }
@@ -1411,7 +1255,7 @@ client.on('messageCreate', async (message) => {
 // Anti-link handler
 client.on('messageCreate', async (message) => {
     if (message.author?.bot || !message.guild) return;
-    if (message.content.startsWith('-')) return; // Changed from ! to -
+    if (message.content.startsWith('-')) return;
     if (isMod(message.member)) return;
     if (LINK_REGEX.test(message.content)) {
         await message.delete().catch(() => {});
@@ -1427,13 +1271,12 @@ client.on('messageCreate', async (message) => {
     }
 });
 
-// ========== NEW: Auto Voice System Voice State Handler ==========
+// Auto Voice System Voice State Handler
 client.on('voiceStateUpdate', async (oldState, newState) => {
     // Auto-create personal voice channel
     if (newState.channelId && !oldState.channelId) {
         const autoVoice = await getAutoVoice(newState.guild.id, newState.member.id);
         if (autoVoice && autoVoice.channel_id === newState.channelId) {
-            // Small delay to ensure the channel is ready
             setTimeout(async () => {
                 await createPersonalVoiceChannel(newState.member, newState.channel);
             }, 500);
@@ -1443,22 +1286,19 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
     // Auto-delete empty personal voice channels
     if (oldState.channelId && !newState.channelId) {
         const channel = oldState.channel;
-        if (channel && channel.members.size === 0) {
-            // Check if it's a personal channel (ends with "'s VC")
-            if (channel.name.endsWith("'s VC")) {
-                setTimeout(async () => {
-                    const freshChannel = oldState.guild.channels.cache.get(channel.id);
-                    if (freshChannel && freshChannel.members.size === 0) {
-                        await freshChannel.delete().catch(console.error);
-                        console.log(`🗑️ Deleted empty personal channel: ${freshChannel.name}`);
-                    }
-                }, 5000); // Wait 5 seconds before deleting
-            }
+        if (channel && channel.members.size === 0 && channel.name.endsWith("'s VC")) {
+            setTimeout(async () => {
+                const freshChannel = oldState.guild.channels.cache.get(channel.id);
+                if (freshChannel && freshChannel.members.size === 0) {
+                    await freshChannel.delete().catch(console.error);
+                    console.log(`🗑️ Deleted empty personal channel: ${freshChannel.name}`);
+                }
+            }, 5000);
         }
     }
 });
 
-// Original voice tracking (for stats)
+// Voice tracking for stats
 client.on('voiceStateUpdate', async (old, neu) => {
     const uid = neu.member?.id || old.member?.id;
     if (!uid) return;
@@ -1481,7 +1321,7 @@ client.on('guildMemberAdd', async (member) => {
 // Message stats
 client.on('messageCreate', async (msg) => {
     if (msg.author.bot || !msg.guild) return;
-    if (msg.content.startsWith('-')) return; // Changed from ! to -
+    if (msg.content.startsWith('-')) return;
     updateMessageStats(msg.author.id, 1);
 });
 
@@ -1489,17 +1329,17 @@ client.on('messageCreate', async (msg) => {
 client.on('interactionCreate', async (interaction) => {
     if (!interaction.isButton()) return;
     
-    // ========== NEW: Auto Voice Button Handler ==========
-    if (interaction.customId === 'voice_toggle_' + interaction.customId.split('_')[2] || interaction.customId.startsWith('voice_toggle_')) {
-        const channelId = interaction.customId.replace('voice_toggle_', '');
-        const targetChannel = interaction.guild.channels.cache.get(channelId);
+    // Auto Voice Button Handler
+    if (interaction.customId.startsWith('voice_toggle_')) {
+        const voiceChannelId = interaction.customId.replace('voice_toggle_', '');
+        const targetChannel = interaction.guild.channels.cache.get(voiceChannelId);
         
         if (!targetChannel) {
-            return interaction.reply({ content: '❌ Channel not found!', ephemeral: true });
+            return interaction.reply({ content: '❌ Voice channel not found!', ephemeral: true });
         }
         
         const currentSetting = await getAutoVoice(interaction.guild.id, interaction.user.id);
-        const isEnabled = currentSetting && currentSetting.channel_id === channelId;
+        const isEnabled = currentSetting && currentSetting.channel_id === voiceChannelId;
         
         if (isEnabled) {
             await removeAutoVoice(interaction.guild.id, interaction.user.id);
@@ -1510,7 +1350,7 @@ client.on('interactionCreate', async (interaction) => {
                 .setTimestamp();
             await interaction.update({ embeds: [embed], components: [] });
         } else {
-            await addAutoVoice(interaction.guild.id, interaction.user.id, channelId);
+            await addAutoVoice(interaction.guild.id, interaction.user.id, voiceChannelId);
             const embed = new EmbedBuilder()
                 .setColor(0x22C55E)
                 .setTitle('🟢 Auto-Voice Enabled')
@@ -1521,6 +1361,7 @@ client.on('interactionCreate', async (interaction) => {
         return;
     }
     
+    // Verification button
     if (interaction.customId === 'verify_button') {
         const cfg = await getVerif(interaction.guild.id);
         if (!cfg) return interaction.reply({ content: '❌ Not configured', ephemeral: true });
@@ -1529,6 +1370,7 @@ client.on('interactionCreate', async (interaction) => {
         await interaction.reply({ embeds: [new EmbedBuilder().setColor(0x22C55E).setTitle('✅ Verified!')], ephemeral: true });
     }
     
+    // Reaction role buttons
     if (interaction.customId === 'role_phone' || interaction.customId === 'role_pc') {
         const roles = await getRR(interaction.guild.id, interaction.message.id);
         const targetEmoji = interaction.customId === 'role_phone' ? '📱' : '💻';
@@ -1543,6 +1385,7 @@ client.on('interactionCreate', async (interaction) => {
         }
     }
     
+    // Ticket buttons
     if (interaction.customId === 'create_ticket') {
         const existing = await getTicket(interaction.user.id, interaction.guild.id);
         if (existing) return interaction.reply({ content: `❌ You have a ticket: <#${existing.channel_id}>`, ephemeral: true });
@@ -1584,16 +1427,14 @@ client.on('interactionCreate', async (interaction) => {
 // Ready event
 client.once('ready', async () => {
     await loadSentGames();
+    await cleanupExpiredGiveaways();
     console.log(`✅ ${client.user.tag} is online!`);
     console.log(`🤖 AI Chat System Ready - Natural Darija Support`);
     console.log(`📝 AI Commands: -ai <message> | -ask <question> | -iahelp`);
-    console.log(`🌍 Languages: Darija (Natural), Arabic, French, English`);
-    console.log(`💬 Example: -ai slm -> wa 3lykom slm`);
-    console.log(`🎉 Enhanced Giveaway System Loaded!`);
-    console.log(`📋 Giveaway Commands: -giveaway, -gend, -greroll, -glist, -gquick`);
-    console.log(`🎤 Auto Voice System Loaded!`);
-    console.log(`🎤 Voice Commands: -voice add <channel_id> | -control <channel_id>`);
-    client.user.setActivity('-ai or -giveaway', { type: 3 });
+    console.log(`🎉 Giveaway Command: -gv <winners> <time> <prize>`);
+    console.log(`🎤 Auto Voice System: -voice add <channel_id> | -cn <channel_id>`);
+    console.log(`📋 Other Commands: -help for full list`);
+    client.user.setActivity('-help for commands', { type: 3 });
     setTimeout(() => joinVoiceChannelProper(), 3000);
 });
 
@@ -1601,8 +1442,8 @@ client.once('ready', async () => {
 async function gracefulShutdown() {
     await saveAllVoiceTime();
     for (const interval of activeFreeGameSessions.values()) clearInterval(interval);
+    for (const timeout of activeGiveawayTimeouts.values()) clearTimeout(timeout);
     if (currentVoiceConnection) currentVoiceConnection.destroy();
-    if (giveawayManager.checkInterval) clearInterval(giveawayManager.checkInterval);
     db.close(() => process.exit(0));
 }
 process.on('SIGINT', gracefulShutdown);
