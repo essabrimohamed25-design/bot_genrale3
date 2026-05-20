@@ -40,6 +40,14 @@ db.serialize(() => {
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )`);
     
+    // ========== NEW: Auto Voice System Table ==========
+    db.run(`CREATE TABLE IF NOT EXISTS auto_voice (
+        guild_id TEXT,
+        user_id TEXT,
+        channel_id TEXT,
+        PRIMARY KEY (guild_id, user_id)
+    )`);
+    
     console.log('✅ Database ready');
 });
 
@@ -68,6 +76,9 @@ const voiceStartTimes = new Map();
 const activeFreeGameSessions = new Map();
 const sentGamesCache = new Set();
 const linkWarnCooldown = new Map();
+
+// ========== NEW: Auto Voice System Variables ==========
+const autoVoiceEnabled = new Map(); // Cache for enabled auto voice per user
 
 // Free games list
 const FREE_STEAM_GAMES = [
@@ -397,6 +408,108 @@ async function joinVoiceChannelProper() {
     }
 }
 
+// ========== NEW: Auto Voice System Functions ==========
+
+// Add auto voice for user
+async function addAutoVoice(guildId, userId, channelId) {
+    return new Promise((resolve) => {
+        db.run(`INSERT OR REPLACE INTO auto_voice (guild_id, user_id, channel_id) VALUES (?, ?, ?)`, 
+            [guildId, userId, channelId], () => {
+            autoVoiceEnabled.set(`${guildId}-${userId}`, channelId);
+            resolve();
+        });
+    });
+}
+
+// Remove auto voice for user
+async function removeAutoVoice(guildId, userId) {
+    return new Promise((resolve) => {
+        db.run(`DELETE FROM auto_voice WHERE guild_id = ? AND user_id = ?`, 
+            [guildId, userId], () => {
+            autoVoiceEnabled.delete(`${guildId}-${userId}`);
+            resolve();
+        });
+    });
+}
+
+// Get auto voice for user
+async function getAutoVoice(guildId, userId) {
+    return new Promise((resolve) => {
+        const cached = autoVoiceEnabled.get(`${guildId}-${userId}`);
+        if (cached) return resolve({ channel_id: cached });
+        
+        db.get(`SELECT channel_id FROM auto_voice WHERE guild_id = ? AND user_id = ?`, 
+            [guildId, userId], (err, row) => {
+            if (row) autoVoiceEnabled.set(`${guildId}-${userId}`, row.channel_id);
+            resolve(row);
+        });
+    });
+}
+
+// Create personal voice channel
+async function createPersonalVoiceChannel(member, triggerChannel) {
+    const category = triggerChannel.parent;
+    const channelName = `${member.displayName}'s VC`;
+    
+    try {
+        const newChannel = await member.guild.channels.create({
+            name: channelName,
+            type: ChannelType.GuildVoice,
+            parent: category,
+            permissionOverwrites: [
+                {
+                    id: member.id,
+                    allow: [PermissionsBitField.Flags.ManageChannels, PermissionsBitField.Flags.MuteMembers, PermissionsBitField.Flags.DeafenMembers, PermissionsBitField.Flags.MoveMembers],
+                },
+                {
+                    id: member.guild.id,
+                    allow: [PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.Speak],
+                }
+            ]
+        });
+        
+        // Move user to new channel
+        await member.voice.setChannel(newChannel);
+        return newChannel;
+    } catch (error) {
+        console.error('Error creating personal voice channel:', error);
+        return null;
+    }
+}
+
+// Send voice control panel
+async function sendVoiceControlPanel(channel, targetChannelId) {
+    const targetChannel = channel.guild.channels.cache.get(targetChannelId);
+    if (!targetChannel) {
+        return channel.send('❌ Invalid voice channel ID!');
+    }
+    
+    const userSetting = await getAutoVoice(channel.guild.id, channel.author.id);
+    const isEnabled = userSetting && userSetting.channel_id === targetChannelId;
+    
+    const embed = new EmbedBuilder()
+        .setColor(isEnabled ? 0x22C55E : 0x5865F2)
+        .setTitle('🎤 Auto Voice Control Panel')
+        .setDescription(`Configure auto-voice for **${targetChannel.name}**`)
+        .addFields(
+            { name: 'Status', value: isEnabled ? '✅ **ENABLED**' : '❌ **DISABLED**', inline: true },
+            { name: 'How it works', value: 'When enabled, joining this channel will automatically create a personal voice channel named after you!\n\nThe personal channel will auto-delete when empty.', inline: false }
+        )
+        .setFooter({ text: 'Click the button below to toggle auto-voice' })
+        .setTimestamp();
+    
+    const row = new ActionRowBuilder()
+        .addComponents(
+            new ButtonBuilder()
+                .setCustomId(`voice_toggle_${targetChannelId}`)
+                .setLabel(isEnabled ? 'Disable Auto-Voice' : 'Enable Auto-Voice')
+                .setStyle(isEnabled ? ButtonStyle.Danger : ButtonStyle.Success)
+                .setEmoji(isEnabled ? '🔴' : '🟢')
+        );
+    
+    await channel.send({ embeds: [embed], components: [row] });
+}
+
 // Welcome message
 async function sendWelcome(member) {
     const channel = member.guild.channels.cache.get(WELCOME_CHANNEL_ID);
@@ -420,7 +533,7 @@ async function saveAllVoiceTime() {
 }
 
 // ============================================
-// ENHANCED GIVEAWAY SYSTEM (ADDED)
+// ENHANCED GIVEAWAY SYSTEM
 // ============================================
 
 // Store active giveaways in memory for faster access
@@ -665,20 +778,20 @@ class GiveawayManager {
 const giveawayManager = new GiveawayManager(db, client);
 
 // ============================================
-// MAIN MESSAGE HANDLER - ALL COMMANDS USE ! PREFIX
+// MAIN MESSAGE HANDLER - ALL COMMANDS USE - PREFIX (CHANGED FROM !)
 // ============================================
 client.on('messageCreate', async (message) => {
     // Ignore bots
     if (message.author.bot) return;
     
     // Skip non-command messages
-    if (!message.content.startsWith('!')) return;
+    if (!message.content.startsWith('-')) return;
     
     const args = message.content.slice(1).trim().split(/ +/);
     const cmd = args.shift().toLowerCase();
     const { member, guild, channel } = message;
     
-    // ========== AI COMMAND: !ai ==========
+    // ========== AI COMMAND: -ai ==========
     if (cmd === 'ai') {
         if (!args.length) {
             const helpEmbed = new EmbedBuilder()
@@ -686,8 +799,8 @@ client.on('messageCreate', async (message) => {
                 .setTitle('🤖 AI Chat Command')
                 .setDescription('Chat with the AI assistant naturally!')
                 .addFields(
-                    { name: 'Usage', value: '`!ai <your message>`', inline: false },
-                    { name: 'Examples', value: '`!ai slm`\n`!ai labas?\n`!ai كيف حالك؟`\n`!ai Comment ca va?`\n`!ai How are you?`', inline: false },
+                    { name: 'Usage', value: '`-ai <your message>`', inline: false },
+                    { name: 'Examples', value: '`-ai slm`\n`-ai labas?\n`-ai كيف حالك؟`\n`-ai Comment ca va?`\n`-ai How are you?`', inline: false },
                     { name: 'Supported Languages', value: '🇲🇦 Darija • 🇸🇦 Arabic • 🇫🇷 French • 🇬🇧 English', inline: false }
                 )
                 .setTimestamp();
@@ -699,10 +812,10 @@ client.on('messageCreate', async (message) => {
         return message.reply(response);
     }
     
-    // ========== AI COMMAND: !ask ==========
+    // ========== AI COMMAND: -ask ==========
     if (cmd === 'ask') {
         if (!args.length) {
-            return message.reply('❌ Please provide a question!\nExample: `!ask chno had lhaja?`');
+            return message.reply('❌ Please provide a question!\nExample: `-ask chno had lhaja?`');
         }
         const question = args.join(' ');
         await message.channel.sendTyping();
@@ -710,7 +823,7 @@ client.on('messageCreate', async (message) => {
         return message.reply(response);
     }
     
-    // ========== AI HELP COMMAND: !iahelp ==========
+    // ========== AI HELP COMMAND: -iahelp ==========
     if (cmd === 'iahelp' || cmd === 'aihelp') {
         const stats = aiSystem.getStats();
         const embed = new EmbedBuilder()
@@ -718,9 +831,9 @@ client.on('messageCreate', async (message) => {
             .setTitle('🤖 AI Chat System - Natural Conversations')
             .setDescription('Chat with the AI assistant that speaks naturally like a real person!')
             .addFields(
-                { name: '📝 Commands', value: '`!ai <message>` - Chat naturally\n`!ask <question>` - Ask anything\n`!iahelp` - Show this help', inline: false },
+                { name: '📝 Commands', value: '`-ai <message>` - Chat naturally\n`-ask <question>` - Ask anything\n`-iahelp` - Show this help', inline: false },
                 { name: '🌍 Language Support', value: '🇲🇦 **Darija** (الدارجة) - Natural Moroccan Arabic\n🇸🇦 **Arabic** (العربية)\n🇫🇷 **French** (Français)\n🇬🇧 **English**', inline: false },
-                { name: '💡 Examples', value: '`!ai slm` - Bot replies: wa 3lykom slm\n`!ai labas?` - Bot replies naturally\n`!ask chno hadchi?` - Ask anything in Darija', inline: false },
+                { name: '💡 Examples', value: '`-ai slm` - Bot replies: wa 3lykom slm\n`-ai labas?` - Bot replies naturally\n`-ask chno hadchi?` - Ask anything in Darija', inline: false },
                 { name: '📊 Statistics', value: `Active users: ${stats.activeUsers}\n🗣️ Darija: ${stats.languages.darija}\n📖 Arabic: ${stats.languages.arabic}\n🇫🇷 French: ${stats.languages.french}\n🇬🇧 English: ${stats.languages.english}`, inline: true }
             )
             .setFooter({ text: 'The AI responds naturally in your language!' })
@@ -728,7 +841,51 @@ client.on('messageCreate', async (message) => {
         return message.reply({ embeds: [embed] });
     }
     
-    // ========== NEW GIVEAWAY COMMANDS ==========
+    // ========== NEW: AUTO VOICE COMMANDS ==========
+    
+    // -voice add <channel_id>
+    if (cmd === 'voice' && args[0] === 'add') {
+        const channelId = args[1];
+        if (!channelId) {
+            return message.reply('❌ Usage: `-voice add <channel_id>`\nExample: `-voice add 123456789012345678`');
+        }
+        
+        const voiceChannel = guild.channels.cache.get(channelId);
+        if (!voiceChannel || voiceChannel.type !== ChannelType.GuildVoice) {
+            return message.reply('❌ Invalid voice channel ID! Make sure it\'s a voice channel.');
+        }
+        
+        await addAutoVoice(guild.id, message.author.id, channelId);
+        const embed = new EmbedBuilder()
+            .setColor(0x22C55E)
+            .setTitle('✅ Auto-Voice Enabled')
+            .setDescription(`You will now auto-create a personal voice channel when joining **${voiceChannel.name}**!`)
+            .addFields(
+                { name: 'How it works', value: 'When you join that channel, a personal VC named after you will be created automatically.', inline: false },
+                { name: 'Auto-Delete', value: 'Your personal VC will delete itself when empty.', inline: false },
+                { name: 'Control Panel', value: 'Use `-control ' + channelId + '` to manage this setting.', inline: false }
+            )
+            .setTimestamp();
+        return message.reply({ embeds: [embed] });
+    }
+    
+    // -control <channel_id>
+    if (cmd === 'control') {
+        const channelId = args[0];
+        if (!channelId) {
+            return message.reply('❌ Usage: `-control <channel_id>`\nExample: `-control 123456789012345678`\n\nUse `-voice add <channel_id>` first to enable auto-voice!');
+        }
+        
+        const voiceChannel = guild.channels.cache.get(channelId);
+        if (!voiceChannel || voiceChannel.type !== ChannelType.GuildVoice) {
+            return message.reply('❌ Invalid voice channel ID! Please provide a valid voice channel ID.');
+        }
+        
+        await sendVoiceControlPanel(message, channelId);
+        return;
+    }
+    
+    // ========== NEW GIVEAWAY COMMANDS (Using - prefix) ==========
     
     // Start interactive giveaway
     if (cmd === 'giveaway' || cmd === 'gstart') {
@@ -867,7 +1024,7 @@ client.on('messageCreate', async (message) => {
         
         const giveawayId = args[0];
         if (!giveawayId) {
-            return message.reply('❌ Please provide a giveaway ID!\nUsage: `!greroll <giveaway_id>`');
+            return message.reply('❌ Please provide a giveaway ID!\nUsage: `-greroll <giveaway_id>`');
         }
         
         await message.reply(`🎲 Rerolling giveaway \`${giveawayId}\`...`);
@@ -908,7 +1065,7 @@ client.on('messageCreate', async (message) => {
         if (!isMod(message.member)) return message.reply('❌ Permission denied!');
         
         const channelMatch = args[0]?.match(/<#(\d+)>/) || (args[0] ? { 1: args[0] } : null);
-        if (!channelMatch) return message.reply('❌ Usage: `!gquick #channel 10m 3 "Prize name"`');
+        if (!channelMatch) return message.reply('❌ Usage: `-gquick #channel 10m 3 "Prize name"`');
         
         const channel = message.guild.channels.cache.get(channelMatch[1]);
         if (!channel) return message.reply('❌ Invalid channel!');
@@ -934,20 +1091,21 @@ client.on('messageCreate', async (message) => {
     const modCmds = ['ban', 'kick', 'mute', 'unmute', 'warn', 'clear', 'lock', 'unlock', 'giverole', 'removerole', 'unban', 'ann', 'anni', 'ticketsetup', 'ticket', 'roltest', 'verif', 'sendpanel', 'verifstatus', 'resetverif', 'freegame', 'stopfreegame'];
     if (modCmds.includes(cmd) && !isMod(member)) return message.reply('❌ Permission denied!');
     
-    // HELP
+    // HELP (Updated to use - prefix)
     if (cmd === 'help') {
         const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('🛡️ Commands')
-            .setDescription('**Moderation:** `!ban`, `!kick`, `!mute`, `!unmute`, `!warn`, `!clear`, `!lock`, `!unlock`, `!giverole`, `!removerole`, `!unban`')
+            .setDescription('**Moderation:** `-ban`, `-kick`, `-mute`, `-unmute`, `-warn`, `-clear`, `-lock`, `-unlock`, `-giverole`, `-removerole`, `-unban`')
             .addFields(
-                { name: '🤖 AI Chat', value: '`!ai <message>` - Chat naturally\n`!ask <question>` - Ask AI\n`!iahelp` - AI help', inline: false },
-                { name: '🎮 Free Games', value: '`!freegame` - Start free games\n`!stopfreegame` - Stop', inline: false },
-                { name: '🎉 Giveaways', value: '`!giveaway` - Interactive giveaway setup\n`!gstart` - Same as !giveaway\n`!gend <id>` - End a giveaway\n`!greroll <id>` - Reroll winners\n`!glist` - List active giveaways\n`!gquick #channel 10m 3 "Prize"` - Quick giveaway', inline: false },
-                { name: 'ℹ️ Info', value: '`!userinfo`, `!serverinfo`, `!avatar`, `!info`', inline: false },
-                { name: '📊 Stats', value: '`!rank`, `!top`, `!messages`, `!voice`', inline: false },
-                { name: '📢 Announcements', value: '`!ann`, `!anni`', inline: false },
-                { name: '🎫 Ticket', value: '`!ticketsetup`, `!ticket`', inline: false },
-                { name: '🎭 Reaction Roles', value: '`!roltest`', inline: false },
-                { name: '✅ Verification', value: '`!verif`, `!sendpanel`, `!verifstatus`, `!resetverif`', inline: false }
+                { name: '🎤 Auto Voice System', value: '`-voice add <channel_id>` - Enable auto personal VC\n`-control <channel_id>` - Open control panel', inline: false },
+                { name: '🤖 AI Chat', value: '`-ai <message>` - Chat naturally\n`-ask <question>` - Ask AI\n`-iahelp` - AI help', inline: false },
+                { name: '🎮 Free Games', value: '`-freegame` - Start free games\n`-stopfreegame` - Stop', inline: false },
+                { name: '🎉 Giveaways', value: '`-giveaway` - Interactive giveaway setup\n`-gstart` - Same as -giveaway\n`-gend <id>` - End a giveaway\n`-greroll <id>` - Reroll winners\n`-glist` - List active giveaways\n`-gquick #channel 10m 3 "Prize"` - Quick giveaway', inline: false },
+                { name: 'ℹ️ Info', value: '`-userinfo`, `-serverinfo`, `-avatar`, `-info`', inline: false },
+                { name: '📊 Stats', value: '`-rank`, `-top`, `-messages`, `-voice`', inline: false },
+                { name: '📢 Announcements', value: '`-ann`, `-anni`', inline: false },
+                { name: '🎫 Ticket', value: '`-ticketsetup`, `-ticket`', inline: false },
+                { name: '🎭 Reaction Roles', value: '`-roltest`', inline: false },
+                { name: '✅ Verification', value: '`-verif`, `-sendpanel`, `-verifstatus`, `-resetverif`', inline: false }
             ).setTimestamp();
         return message.reply({ embeds: [embed] });
     }
@@ -1094,7 +1252,7 @@ client.on('messageCreate', async (message) => {
     
     if (cmd === 'ann') {
         const text = args.join(' ');
-        if (!text) return message.reply('Usage: `!ann <message>`');
+        if (!text) return message.reply('Usage: `-ann <message>`');
         await message.delete();
         await sendAnn(channel, text);
         return;
@@ -1102,7 +1260,7 @@ client.on('messageCreate', async (message) => {
     
     if (cmd === 'suggest') {
         const sug = args.join(' ');
-        if (!sug) return message.reply('Usage: `!suggest <message>`');
+        if (!sug) return message.reply('Usage: `-suggest <message>`');
         const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('💡 Suggestion').setDescription(sug).setAuthor({ name: member.user.tag });
         const msg = await channel.send({ embeds: [embed] });
         await msg.react('✅'); await msg.react('❌');
@@ -1160,7 +1318,7 @@ client.on('messageCreate', async (message) => {
     
     if (cmd === 'clear' && args[0]) {
         const amount = parseInt(args[0]);
-        if (!amount || amount < 1 || amount > 100) return message.reply('Usage: `!clear <1-100>`');
+        if (!amount || amount < 1 || amount > 100) return message.reply('Usage: `-clear <1-100>`');
         const fetched = await channel.messages.fetch({ limit: amount });
         const deleted = await channel.bulkDelete(fetched);
         const reply = await message.reply(`✅ Deleted ${deleted.size} messages`);
@@ -1203,34 +1361,6 @@ client.on('messageCreate', async (message) => {
         if (!user) return message.reply('❌ Not found');
         await guild.members.unban(user);
         await message.reply(`✅ Unbanned ${user.tag}`);
-        return;
-    }
-    
-    if (cmd === 'giveaway' && args[0] && args[1] && args[2]) {
-        const prize = args[0];
-        const duration = parseInt(args[1]);
-        const winners = parseInt(args[2]);
-        const end = Date.now() + (duration * 60000);
-        const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('🎉 GIVEAWAY')
-            .setDescription(`**Prize:** ${prize}\n**Winners:** ${winners}\n**Duration:** ${duration}m`)
-            .setFooter({ text: 'React 🎉' }).setTimestamp(end);
-        const msg = await channel.send({ embeds: [embed] });
-        await msg.react('🎉');
-        db.run(`INSERT INTO giveaways (message_id, channel_id, prize, winners, end_time) VALUES (?, ?, ?, ?, ?)`, [msg.id, channel.id, prize, winners, end]);
-        setTimeout(async () => {
-            const fetched = await msg.fetch();
-            const reaction = fetched.reactions.cache.get('🎉');
-            let participants = reaction ? (await reaction.users.fetch()).filter(u => !u.bot) : [];
-            const selected = [];
-            for (let i = 0; i < Math.min(winners, participants.size); i++) {
-                const idx = Math.floor(Math.random() * participants.size);
-                selected.push([...participants][idx]);
-            }
-            const result = new EmbedBuilder().setColor(selected.length ? 0x22C55E : 0xEF4444).setTitle('🎉 GIVEAWAY ENDED')
-                .setDescription(`**Prize:** ${prize}\n**Winners:** ${selected.length ? selected.map(w => w.toString()).join(', ') : 'None'}`);
-            await channel.send({ embeds: [result] });
-        }, duration * 60000);
-        await message.reply(`✅ Giveaway started for ${prize}!`);
         return;
     }
     
@@ -1281,7 +1411,7 @@ client.on('messageCreate', async (message) => {
 // Anti-link handler
 client.on('messageCreate', async (message) => {
     if (message.author?.bot || !message.guild) return;
-    if (message.content.startsWith('!')) return;
+    if (message.content.startsWith('-')) return; // Changed from ! to -
     if (isMod(message.member)) return;
     if (LINK_REGEX.test(message.content)) {
         await message.delete().catch(() => {});
@@ -1297,7 +1427,38 @@ client.on('messageCreate', async (message) => {
     }
 });
 
-// Voice tracking
+// ========== NEW: Auto Voice System Voice State Handler ==========
+client.on('voiceStateUpdate', async (oldState, newState) => {
+    // Auto-create personal voice channel
+    if (newState.channelId && !oldState.channelId) {
+        const autoVoice = await getAutoVoice(newState.guild.id, newState.member.id);
+        if (autoVoice && autoVoice.channel_id === newState.channelId) {
+            // Small delay to ensure the channel is ready
+            setTimeout(async () => {
+                await createPersonalVoiceChannel(newState.member, newState.channel);
+            }, 500);
+        }
+    }
+    
+    // Auto-delete empty personal voice channels
+    if (oldState.channelId && !newState.channelId) {
+        const channel = oldState.channel;
+        if (channel && channel.members.size === 0) {
+            // Check if it's a personal channel (ends with "'s VC")
+            if (channel.name.endsWith("'s VC")) {
+                setTimeout(async () => {
+                    const freshChannel = oldState.guild.channels.cache.get(channel.id);
+                    if (freshChannel && freshChannel.members.size === 0) {
+                        await freshChannel.delete().catch(console.error);
+                        console.log(`🗑️ Deleted empty personal channel: ${freshChannel.name}`);
+                    }
+                }, 5000); // Wait 5 seconds before deleting
+            }
+        }
+    }
+});
+
+// Original voice tracking (for stats)
 client.on('voiceStateUpdate', async (old, neu) => {
     const uid = neu.member?.id || old.member?.id;
     if (!uid) return;
@@ -1320,13 +1481,45 @@ client.on('guildMemberAdd', async (member) => {
 // Message stats
 client.on('messageCreate', async (msg) => {
     if (msg.author.bot || !msg.guild) return;
-    if (msg.content.startsWith('!')) return;
+    if (msg.content.startsWith('-')) return; // Changed from ! to -
     updateMessageStats(msg.author.id, 1);
 });
 
 // Button interactions
 client.on('interactionCreate', async (interaction) => {
     if (!interaction.isButton()) return;
+    
+    // ========== NEW: Auto Voice Button Handler ==========
+    if (interaction.customId === 'voice_toggle_' + interaction.customId.split('_')[2] || interaction.customId.startsWith('voice_toggle_')) {
+        const channelId = interaction.customId.replace('voice_toggle_', '');
+        const targetChannel = interaction.guild.channels.cache.get(channelId);
+        
+        if (!targetChannel) {
+            return interaction.reply({ content: '❌ Channel not found!', ephemeral: true });
+        }
+        
+        const currentSetting = await getAutoVoice(interaction.guild.id, interaction.user.id);
+        const isEnabled = currentSetting && currentSetting.channel_id === channelId;
+        
+        if (isEnabled) {
+            await removeAutoVoice(interaction.guild.id, interaction.user.id);
+            const embed = new EmbedBuilder()
+                .setColor(0xEF4444)
+                .setTitle('🔴 Auto-Voice Disabled')
+                .setDescription(`Auto-voice has been disabled for **${targetChannel.name}**.`)
+                .setTimestamp();
+            await interaction.update({ embeds: [embed], components: [] });
+        } else {
+            await addAutoVoice(interaction.guild.id, interaction.user.id, channelId);
+            const embed = new EmbedBuilder()
+                .setColor(0x22C55E)
+                .setTitle('🟢 Auto-Voice Enabled')
+                .setDescription(`Auto-voice has been enabled for **${targetChannel.name}**!\n\nWhen you join this channel, a personal voice channel will be created for you.`)
+                .setTimestamp();
+            await interaction.update({ embeds: [embed], components: [] });
+        }
+        return;
+    }
     
     if (interaction.customId === 'verify_button') {
         const cfg = await getVerif(interaction.guild.id);
@@ -1393,12 +1586,14 @@ client.once('ready', async () => {
     await loadSentGames();
     console.log(`✅ ${client.user.tag} is online!`);
     console.log(`🤖 AI Chat System Ready - Natural Darija Support`);
-    console.log(`📝 AI Commands: !ai <message> | !ask <question> | !iahelp`);
+    console.log(`📝 AI Commands: -ai <message> | -ask <question> | -iahelp`);
     console.log(`🌍 Languages: Darija (Natural), Arabic, French, English`);
-    console.log(`💬 Example: !ai slm -> wa 3lykom slm`);
+    console.log(`💬 Example: -ai slm -> wa 3lykom slm`);
     console.log(`🎉 Enhanced Giveaway System Loaded!`);
-    console.log(`📋 Giveaway Commands: !giveaway, !gend, !greroll, !glist, !gquick`);
-    client.user.setActivity('!ai or !giveaway', { type: 3 });
+    console.log(`📋 Giveaway Commands: -giveaway, -gend, -greroll, -glist, -gquick`);
+    console.log(`🎤 Auto Voice System Loaded!`);
+    console.log(`🎤 Voice Commands: -voice add <channel_id> | -control <channel_id>`);
+    client.user.setActivity('-ai or -giveaway', { type: 3 });
     setTimeout(() => joinVoiceChannelProper(), 3000);
 });
 
