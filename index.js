@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
 const { joinVoiceChannel, getVoiceConnection, VoiceConnectionStatus, entersState } = require('@discordjs/voice');
 const sqlite3 = require('sqlite3').verbose();
 require('dotenv').config();
@@ -23,7 +23,7 @@ db.serialize(() => {
     db.run(`CREATE TABLE IF NOT EXISTS user_stats (user_id TEXT PRIMARY KEY, messages INTEGER DEFAULT 0, voice_minutes INTEGER DEFAULT 0, xp INTEGER DEFAULT 0, level INTEGER DEFAULT 1)`);
     db.run(`CREATE TABLE IF NOT EXISTS free_games_sent (id INTEGER PRIMARY KEY AUTOINCREMENT, game_id TEXT UNIQUE, sent_at TEXT)`);
     
-    // Giveaway table (simplified)
+    // Giveaway table
     db.run(`CREATE TABLE IF NOT EXISTS giveaways (
         id TEXT PRIMARY KEY,
         message_id TEXT,
@@ -72,8 +72,9 @@ const activeFreeGameSessions = new Map();
 const sentGamesCache = new Set();
 const linkWarnCooldown = new Map();
 
-// Auto Voice System cache
+// Auto Voice System
 const autoVoiceCache = new Map();
+const userPersonalChannels = new Map(); // Track which personal channel belongs to which user
 
 // Free games list
 const FREE_STEAM_GAMES = [
@@ -449,17 +450,26 @@ async function getAutoVoice(guildId, userId) {
 
 async function createPersonalVoiceChannel(member, triggerChannel) {
     const category = triggerChannel.parent;
-    const channelName = `${member.displayName}'s VC`;
+    // Use only username without any suffix
+    const channelName = member.user.username;
     
     try {
         const newChannel = await member.guild.channels.create({
             name: channelName,
             type: ChannelType.GuildVoice,
             parent: category,
+            userLimit: 0,
             permissionOverwrites: [
                 {
                     id: member.id,
-                    allow: [PermissionsBitField.Flags.ManageChannels, PermissionsBitField.Flags.MuteMembers, PermissionsBitField.Flags.DeafenMembers, PermissionsBitField.Flags.MoveMembers],
+                    allow: [
+                        PermissionsBitField.Flags.ManageChannels,
+                        PermissionsBitField.Flags.MuteMembers,
+                        PermissionsBitField.Flags.DeafenMembers,
+                        PermissionsBitField.Flags.MoveMembers,
+                        PermissionsBitField.Flags.Connect,
+                        PermissionsBitField.Flags.Speak
+                    ],
                 },
                 {
                     id: member.guild.id,
@@ -467,6 +477,9 @@ async function createPersonalVoiceChannel(member, triggerChannel) {
                 }
             ]
         });
+        
+        // Store mapping
+        userPersonalChannels.set(newChannel.id, member.id);
         
         await member.voice.setChannel(newChannel);
         return newChannel;
@@ -476,37 +489,104 @@ async function createPersonalVoiceChannel(member, triggerChannel) {
     }
 }
 
+// Voice Control Panel
 async function sendVoiceControlPanel(textChannel, voiceChannelId) {
     const voiceChannel = textChannel.guild.channels.cache.get(voiceChannelId);
     if (!voiceChannel || voiceChannel.type !== ChannelType.GuildVoice) {
         return textChannel.send('❌ Invalid voice channel ID! Please provide a valid voice channel ID.');
     }
     
-    const userSetting = await getAutoVoice(textChannel.guild.id, textChannel.author.id);
-    const isEnabled = userSetting && userSetting.channel_id === voiceChannelId;
+    // Check if this channel belongs to the user
+    const channelOwner = userPersonalChannels.get(voiceChannel.id);
+    if (channelOwner !== textChannel.author.id && !isMod(textChannel.member)) {
+        return textChannel.send('❌ You can only control your own personal voice channel!');
+    }
     
     const embed = new EmbedBuilder()
-        .setColor(isEnabled ? 0x22C55E : 0x5865F2)
+        .setColor(0x5865F2)
         .setTitle('🎤 Voice Control Panel')
-        .setDescription(`Configure auto-voice for **${voiceChannel.name}**`)
+        .setDescription(`Controlling: **${voiceChannel.name}**`)
         .addFields(
-            { name: '📊 Status', value: isEnabled ? '✅ **ENABLED**' : '❌ **DISABLED**', inline: true },
-            { name: '🎯 Voice Channel', value: `${voiceChannel.name} (${voiceChannelId})`, inline: true },
-            { name: 'ℹ️ How it works', value: 'When enabled, joining this voice channel will automatically create a personal voice channel named after you!\n\nThe personal channel will auto-delete when empty.', inline: false }
+            { name: '👑 Owner', value: `<@${channelOwner}>`, inline: true },
+            { name: '👥 Members', value: `${voiceChannel.members.size} users`, inline: true },
+            { name: '🔒 Status', value: voiceChannel.permissionsFor(voiceChannel.guild.id).has(PermissionsBitField.Flags.Connect) ? 'Public' : 'Locked', inline: true }
         )
-        .setFooter({ text: 'Click the button below to toggle auto-voice' })
+        .setFooter({ text: 'Use the buttons below to manage your voice channel' })
         .setTimestamp();
     
-    const row = new ActionRowBuilder()
+    // Create action rows with buttons
+    const row1 = new ActionRowBuilder()
         .addComponents(
             new ButtonBuilder()
-                .setCustomId(`voice_toggle_${voiceChannelId}`)
-                .setLabel(isEnabled ? '🔴 Disable Auto-Voice' : '🟢 Enable Auto-Voice')
-                .setStyle(isEnabled ? ButtonStyle.Danger : ButtonStyle.Success)
-                .setEmoji(isEnabled ? '🔴' : '🟢')
+                .setCustomId(`vc_lock_${voiceChannel.id}`)
+                .setLabel('🔒 Lock')
+                .setStyle(ButtonStyle.Secondary)
+                .setEmoji('🔒'),
+            new ButtonBuilder()
+                .setCustomId(`vc_unlock_${voiceChannel.id}`)
+                .setLabel('🔓 Unlock')
+                .setStyle(ButtonStyle.Secondary)
+                .setEmoji('🔓'),
+            new ButtonBuilder()
+                .setCustomId(`vc_hide_${voiceChannel.id}`)
+                .setLabel('👻 Hide')
+                .setStyle(ButtonStyle.Secondary)
+                .setEmoji('👻'),
+            new ButtonBuilder()
+                .setCustomId(`vc_unhide_${voiceChannel.id}`)
+                .setLabel('👁️ Unhide')
+                .setStyle(ButtonStyle.Secondary)
+                .setEmoji('👁️')
         );
     
-    await textChannel.send({ embeds: [embed], components: [row] });
+    const row2 = new ActionRowBuilder()
+        .addComponents(
+            new ButtonBuilder()
+                .setCustomId(`vc_kick_${voiceChannel.id}`)
+                .setLabel('👢 Kick User')
+                .setStyle(ButtonStyle.Danger)
+                .setEmoji('👢'),
+            new ButtonBuilder()
+                .setCustomId(`vc_muteall_${voiceChannel.id}`)
+                .setLabel('🔇 Mute All')
+                .setStyle(ButtonStyle.Danger)
+                .setEmoji('🔇'),
+            new ButtonBuilder()
+                .setCustomId(`vc_unmuteall_${voiceChannel.id}`)
+                .setLabel('🔊 Unmute All')
+                .setStyle(ButtonStyle.Success)
+                .setEmoji('🔊')
+        );
+    
+    const row3 = new ActionRowBuilder()
+        .addComponents(
+            new ButtonBuilder()
+                .setCustomId(`vc_rename_${voiceChannel.id}`)
+                .setLabel('✏️ Rename')
+                .setStyle(ButtonStyle.Primary)
+                .setEmoji('✏️'),
+            new ButtonBuilder()
+                .setCustomId(`vc_limit_${voiceChannel.id}`)
+                .setLabel('👥 User Limit')
+                .setStyle(ButtonStyle.Primary)
+                .setEmoji('👥'),
+            new ButtonBuilder()
+                .setCustomId(`vc_transfer_${voiceChannel.id}`)
+                .setLabel('🔄 Transfer')
+                .setStyle(ButtonStyle.Primary)
+                .setEmoji('🔄')
+        );
+    
+    const row4 = new ActionRowBuilder()
+        .addComponents(
+            new ButtonBuilder()
+                .setCustomId(`vc_info_${voiceChannel.id}`)
+                .setLabel('ℹ️ Info')
+                .setStyle(ButtonStyle.Secondary)
+                .setEmoji('ℹ️')
+        );
+    
+    await textChannel.send({ embeds: [embed], components: [row1, row2, row3, row4] });
 }
 
 // Welcome message
@@ -531,11 +611,8 @@ async function saveAllVoiceTime() {
     }
 }
 
-// ============================================
-// SIMPLIFIED GIVEAWAY SYSTEM
-// ============================================
+// ========== GIVEAWAY SYSTEM ==========
 
-// Store active giveaway timeouts
 const activeGiveawayTimeouts = new Map();
 
 async function createGiveaway(channel, winners, durationMs, prize, hostedBy) {
@@ -558,7 +635,6 @@ async function createGiveaway(channel, winners, durationMs, prize, hostedBy) {
     const message = await channel.send({ embeds: [embed] });
     await message.react('🎉');
 
-    // Save to database
     await new Promise((resolve) => {
         db.run(
             `INSERT INTO giveaways (id, message_id, channel_id, prize, winners, end_time, hosted_by, ended) 
@@ -571,7 +647,6 @@ async function createGiveaway(channel, winners, durationMs, prize, hostedBy) {
         );
     });
 
-    // Schedule end
     const timeout = setTimeout(() => endGiveaway(giveawayId), durationMs);
     activeGiveawayTimeouts.set(giveawayId, timeout);
 
@@ -579,7 +654,6 @@ async function createGiveaway(channel, winners, durationMs, prize, hostedBy) {
 }
 
 async function endGiveaway(giveawayId) {
-    // Clear timeout if exists
     if (activeGiveawayTimeouts.has(giveawayId)) {
         clearTimeout(activeGiveawayTimeouts.get(giveawayId));
         activeGiveawayTimeouts.delete(giveawayId);
@@ -610,7 +684,6 @@ async function endGiveaway(giveawayId) {
                     return;
                 }
                 
-                // Get participants from reactions
                 let participants = [];
                 try {
                     const reaction = message.reactions.cache.get('🎉');
@@ -622,7 +695,6 @@ async function endGiveaway(giveawayId) {
                     console.error('Error fetching reactions:', reactionError.message);
                 }
 
-                // Pick winners
                 const winners = [];
                 const participantList = [...participants];
                 
@@ -638,10 +710,8 @@ async function endGiveaway(giveawayId) {
                     }
                 }
 
-                // Update database
                 db.run(`UPDATE giveaways SET ended = 1 WHERE id = ?`, [giveawayId]);
 
-                // Update original message
                 try {
                     const updatedEmbed = EmbedBuilder.from(message.embeds[0])
                         .setColor(0x808080)
@@ -655,7 +725,6 @@ async function endGiveaway(giveawayId) {
                     console.log(`Could not edit giveaway message:`, editError.message);
                 }
 
-                // Send results
                 const resultEmbed = new EmbedBuilder()
                     .setColor(winners.length > 0 ? 0x22C55E : 0xEF4444)
                     .setTitle(winners.length > 0 ? '🎉 GIVEAWAY ENDED - WINNERS 🎉' : '🎉 GIVEAWAY ENDED - NO WINNERS 🎉')
@@ -669,7 +738,6 @@ async function endGiveaway(giveawayId) {
 
                 await channel.send({ embeds: [resultEmbed] });
 
-                // Log to mod channel
                 const logChannel = client.channels.cache.get(LOG_CHANNEL_ID);
                 if (logChannel) {
                     const logEmbed = new EmbedBuilder()
@@ -694,7 +762,6 @@ async function endGiveaway(giveawayId) {
     });
 }
 
-// Clean up expired giveaways on startup
 async function cleanupExpiredGiveaways() {
     const now = Date.now();
     db.all(`SELECT id FROM giveaways WHERE ended = 0 AND end_time <= ?`, [now], async (err, rows) => {
@@ -707,9 +774,165 @@ async function cleanupExpiredGiveaways() {
     });
 }
 
-// ============================================
-// MAIN MESSAGE HANDLER - PREFIX: -
-// ============================================
+// ========== VOICE CONTROL HANDLERS ==========
+
+async function handleVoiceControl(interaction) {
+    if (!interaction.customId.startsWith('vc_')) return false;
+    
+    const parts = interaction.customId.split('_');
+    const action = parts[1];
+    const channelId = parts[2];
+    
+    const voiceChannel = interaction.guild.channels.cache.get(channelId);
+    if (!voiceChannel || voiceChannel.type !== ChannelType.GuildVoice) {
+        await interaction.reply({ content: '❌ Voice channel not found!', ephemeral: true });
+        return true;
+    }
+    
+    // Check ownership
+    const channelOwner = userPersonalChannels.get(voiceChannel.id);
+    if (channelOwner !== interaction.user.id && !isMod(interaction.member)) {
+        await interaction.reply({ content: '❌ You can only control your own personal voice channel!', ephemeral: true });
+        return true;
+    }
+    
+    switch(action) {
+        case 'lock':
+            await voiceChannel.permissionOverwrites.edit(interaction.guild.id, { Connect: false });
+            await interaction.reply({ content: '🔒 Voice channel locked!', ephemeral: true });
+            break;
+            
+        case 'unlock':
+            await voiceChannel.permissionOverwrites.edit(interaction.guild.id, { Connect: null });
+            await interaction.reply({ content: '🔓 Voice channel unlocked!', ephemeral: true });
+            break;
+            
+        case 'hide':
+            await voiceChannel.permissionOverwrites.edit(interaction.guild.id, { ViewChannel: false });
+            await interaction.reply({ content: '👻 Voice channel hidden!', ephemeral: true });
+            break;
+            
+        case 'unhide':
+            await voiceChannel.permissionOverwrites.edit(interaction.guild.id, { ViewChannel: null });
+            await interaction.reply({ content: '👁️ Voice channel unhidden!', ephemeral: true });
+            break;
+            
+        case 'kick':
+            // Create user select menu
+            const members = voiceChannel.members.map(m => ({
+                label: m.user.username,
+                value: m.id,
+                description: m.user.tag
+            }));
+            
+            if (members.length === 0) {
+                await interaction.reply({ content: '❌ No members to kick!', ephemeral: true });
+                break;
+            }
+            
+            const selectRow = new ActionRowBuilder()
+                .addComponents(
+                    new StringSelectMenuBuilder()
+                        .setCustomId(`vc_kick_select_${channelId}`)
+                        .setPlaceholder('Select user to kick')
+                        .addOptions(members)
+                );
+            
+            await interaction.reply({ content: 'Select user to kick:', components: [selectRow], ephemeral: true });
+            break;
+            
+        case 'muteall':
+            for (const member of voiceChannel.members) {
+                await member[1].voice.setMute(true);
+            }
+            await interaction.reply({ content: '🔇 All members muted!', ephemeral: true });
+            break;
+            
+        case 'unmuteall':
+            for (const member of voiceChannel.members) {
+                await member[1].voice.setMute(false);
+            }
+            await interaction.reply({ content: '🔊 All members unmuted!', ephemeral: true });
+            break;
+            
+        case 'rename':
+            const modal = new ModalBuilder()
+                .setCustomId(`vc_rename_modal_${channelId}`)
+                .setTitle('Rename Voice Channel');
+            
+            const nameInput = new TextInputBuilder()
+                .setCustomId('new_name')
+                .setLabel('New Channel Name')
+                .setStyle(TextInputStyle.Short)
+                .setPlaceholder('Enter new name...')
+                .setRequired(true)
+                .setMaxLength(32);
+            
+            modal.addComponents(new ActionRowBuilder().addComponents(nameInput));
+            await interaction.showModal(modal);
+            break;
+            
+        case 'limit':
+            const limitModal = new ModalBuilder()
+                .setCustomId(`vc_limit_modal_${channelId}`)
+                .setTitle('Set User Limit');
+            
+            const limitInput = new TextInputBuilder()
+                .setCustomId('user_limit')
+                .setLabel('User Limit (0 = unlimited)')
+                .setStyle(TextInputStyle.Short)
+                .setPlaceholder('Enter number (0-99)')
+                .setRequired(true);
+            
+            limitModal.addComponents(new ActionRowBuilder().addComponents(limitInput));
+            await interaction.showModal(limitModal);
+            break;
+            
+        case 'transfer':
+            const transferMembers = voiceChannel.members.map(m => ({
+                label: m.user.username,
+                value: m.id,
+                description: m.user.tag
+            })).filter(m => m.value !== interaction.user.id);
+            
+            if (transferMembers.length === 0) {
+                await interaction.reply({ content: '❌ No other members to transfer ownership to!', ephemeral: true });
+                break;
+            }
+            
+            const transferRow = new ActionRowBuilder()
+                .addComponents(
+                    new StringSelectMenuBuilder()
+                        .setCustomId(`vc_transfer_select_${channelId}`)
+                        .setPlaceholder('Select new owner')
+                        .addOptions(transferMembers)
+                );
+            
+            await interaction.reply({ content: 'Select new owner:', components: [transferRow], ephemeral: true });
+            break;
+            
+        case 'info':
+            const owner = await interaction.guild.members.fetch(channelOwner).catch(() => null);
+            const embed = new EmbedBuilder()
+                .setColor(0x5865F2)
+                .setTitle('📊 Voice Channel Info')
+                .addFields(
+                    { name: '📛 Name', value: voiceChannel.name, inline: true },
+                    { name: '👑 Owner', value: owner ? owner.user.username : 'Unknown', inline: true },
+                    { name: '👥 Members', value: `${voiceChannel.members.size} / ${voiceChannel.userLimit === 0 ? '∞' : voiceChannel.userLimit}`, inline: true },
+                    { name: '🔒 Locked', value: voiceChannel.permissionsFor(interaction.guild.id).has(PermissionsBitField.Flags.Connect) ? 'No' : 'Yes', inline: true },
+                    { name: '👁️ Visible', value: voiceChannel.permissionsFor(interaction.guild.id).has(PermissionsBitField.Flags.ViewChannel) ? 'Yes' : 'No', inline: true },
+                    { name: '📅 Created', value: `<t:${Math.floor(voiceChannel.createdTimestamp / 1000)}:R>`, inline: true }
+                )
+                .setTimestamp();
+            await interaction.reply({ embeds: [embed], ephemeral: true });
+            break;
+    }
+    
+    return true;
+}
+
+// ========== MAIN MESSAGE HANDLER ==========
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
     if (!message.content.startsWith('-')) return;
@@ -784,9 +1007,9 @@ client.on('messageCreate', async (message) => {
             .setTitle('✅ Auto-Voice Enabled')
             .setDescription(`You will now auto-create a personal voice channel when joining **${voiceChannel.name}**!`)
             .addFields(
-                { name: 'How it works', value: 'When you join that voice channel, a personal VC named after you will be created automatically.', inline: false },
+                { name: 'How it works', value: 'When you join that voice channel, a personal VC using your username will be created automatically.', inline: false },
                 { name: 'Auto-Delete', value: 'Your personal VC will delete itself when empty.', inline: false },
-                { name: 'Control Panel', value: 'Use `-cn ' + channelId + '` in a text channel to manage this setting.', inline: false }
+                { name: 'Control Panel', value: 'Use `-cn ' + channelId + '` in a text channel to open the control panel.', inline: false }
             )
             .setTimestamp();
         return message.reply({ embeds: [embed] });
@@ -803,8 +1026,8 @@ client.on('messageCreate', async (message) => {
         return;
     }
     
-    // ========== SIMPLIFIED GIVEAWAY COMMAND ==========
-    // -gv <winners> <time> <prize>
+    // ========== GIVEAWAY COMMANDS ==========
+    
     if (cmd === 'gv') {
         if (!isMod(message.member)) return message.reply('❌ Permission denied!');
         
@@ -828,7 +1051,6 @@ client.on('messageCreate', async (message) => {
             return message.reply('❌ Please provide a prize name!');
         }
         
-        // Confirm with user
         const confirmEmbed = new EmbedBuilder()
             .setColor(0xFF69B4)
             .setTitle('🎉 Create Giveaway?')
@@ -881,7 +1103,6 @@ client.on('messageCreate', async (message) => {
         return;
     }
     
-    // Helper command to show active giveaways
     if (cmd === 'giveaways' || cmd === 'glist') {
         if (!isMod(message.member)) return message.reply('❌ Permission denied!');
         
@@ -904,7 +1125,6 @@ client.on('messageCreate', async (message) => {
         return;
     }
     
-    // Helper command to end giveaway manually
     if (cmd === 'gend') {
         if (!isMod(message.member)) return message.reply('❌ Permission denied!');
         
@@ -913,7 +1133,6 @@ client.on('messageCreate', async (message) => {
             return message.reply('❌ Usage: `-gend <giveaway_id>`\nUse `-giveaways` to see active giveaway IDs.');
         }
         
-        // Find giveaway by partial ID
         db.all(`SELECT * FROM giveaways WHERE ended = 0 AND id LIKE ?`, [`%${giveawayId}%`], async (err, rows) => {
             if (err || !rows || rows.length === 0) {
                 return message.reply('❌ Giveaway not found!');
@@ -939,7 +1158,7 @@ client.on('messageCreate', async (message) => {
         const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('🛡️ Commands')
             .setDescription('**Prefix:** `-`')
             .addFields(
-                { name: '🎤 Auto Voice System', value: '`-voice add <channel_id>` - Enable auto personal VC\n`-cn <channel_id>` - Send control panel', inline: false },
+                { name: '🎤 Auto Voice System', value: '`-voice add <channel_id>` - Enable auto personal VC\n`-cn <channel_id>` - Send control panel to this text channel', inline: false },
                 { name: '🤖 AI Chat', value: '`-ai <message>` - Chat naturally\n`-ask <question>` - Ask AI\n`-iahelp` - AI help', inline: false },
                 { name: '🎉 Giveaways', value: '`-gv <winners> <time> <prize>` - Create giveaway\n`-giveaways` - List active giveaways\n`-gend <id>` - End giveaway', inline: false },
                 { name: '🎮 Free Games', value: '`-freegame` - Start free games\n`-stopfreegame` - Stop', inline: false },
@@ -1277,6 +1496,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
     if (newState.channelId && !oldState.channelId) {
         const autoVoice = await getAutoVoice(newState.guild.id, newState.member.id);
         if (autoVoice && autoVoice.channel_id === newState.channelId) {
+            // Small delay to ensure the channel is ready
             setTimeout(async () => {
                 await createPersonalVoiceChannel(newState.member, newState.channel);
             }, 500);
@@ -1286,14 +1506,18 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
     // Auto-delete empty personal voice channels
     if (oldState.channelId && !newState.channelId) {
         const channel = oldState.channel;
-        if (channel && channel.members.size === 0 && channel.name.endsWith("'s VC")) {
-            setTimeout(async () => {
-                const freshChannel = oldState.guild.channels.cache.get(channel.id);
-                if (freshChannel && freshChannel.members.size === 0) {
-                    await freshChannel.delete().catch(console.error);
-                    console.log(`🗑️ Deleted empty personal channel: ${freshChannel.name}`);
-                }
-            }, 5000);
+        if (channel && channel.members.size === 0) {
+            // Check if this is a personal channel (stored in userPersonalChannels)
+            if (userPersonalChannels.has(channel.id)) {
+                setTimeout(async () => {
+                    const freshChannel = oldState.guild.channels.cache.get(channel.id);
+                    if (freshChannel && freshChannel.members.size === 0) {
+                        userPersonalChannels.delete(channel.id);
+                        await freshChannel.delete().catch(console.error);
+                        console.log(`🗑️ Deleted empty personal channel: ${freshChannel.name}`);
+                    }
+                }, 5000);
+            }
         }
     }
 });
@@ -1325,53 +1549,113 @@ client.on('messageCreate', async (msg) => {
     updateMessageStats(msg.author.id, 1);
 });
 
-// Button interactions
+// Button and Modal interactions
 client.on('interactionCreate', async (interaction) => {
-    if (!interaction.isButton()) return;
+    // Handle voice control buttons
+    if (interaction.isButton() && await handleVoiceControl(interaction)) return;
     
-    // Auto Voice Button Handler
-    if (interaction.customId.startsWith('voice_toggle_')) {
-        const voiceChannelId = interaction.customId.replace('voice_toggle_', '');
-        const targetChannel = interaction.guild.channels.cache.get(voiceChannelId);
-        
-        if (!targetChannel) {
-            return interaction.reply({ content: '❌ Voice channel not found!', ephemeral: true });
+    // Handle select menus for voice control
+    if (interaction.isStringSelectMenu()) {
+        if (interaction.customId.startsWith('vc_kick_select_')) {
+            const channelId = interaction.customId.replace('vc_kick_select_', '');
+            const voiceChannel = interaction.guild.channels.cache.get(channelId);
+            const userId = interaction.values[0];
+            
+            const channelOwner = userPersonalChannels.get(voiceChannel.id);
+            if (channelOwner !== interaction.user.id && !isMod(interaction.member)) {
+                await interaction.reply({ content: '❌ You can only control your own personal voice channel!', ephemeral: true });
+                return;
+            }
+            
+            const member = voiceChannel.members.get(userId);
+            if (member) {
+                await member.voice.disconnect();
+                await interaction.reply({ content: `✅ Kicked ${member.user.username} from the voice channel!`, ephemeral: true });
+            } else {
+                await interaction.reply({ content: '❌ User not found in voice channel!', ephemeral: true });
+            }
+            return;
         }
         
-        const currentSetting = await getAutoVoice(interaction.guild.id, interaction.user.id);
-        const isEnabled = currentSetting && currentSetting.channel_id === voiceChannelId;
-        
-        if (isEnabled) {
-            await removeAutoVoice(interaction.guild.id, interaction.user.id);
-            const embed = new EmbedBuilder()
-                .setColor(0xEF4444)
-                .setTitle('🔴 Auto-Voice Disabled')
-                .setDescription(`Auto-voice has been disabled for **${targetChannel.name}**.`)
-                .setTimestamp();
-            await interaction.update({ embeds: [embed], components: [] });
-        } else {
-            await addAutoVoice(interaction.guild.id, interaction.user.id, voiceChannelId);
-            const embed = new EmbedBuilder()
-                .setColor(0x22C55E)
-                .setTitle('🟢 Auto-Voice Enabled')
-                .setDescription(`Auto-voice has been enabled for **${targetChannel.name}**!\n\nWhen you join this channel, a personal voice channel will be created for you.`)
-                .setTimestamp();
-            await interaction.update({ embeds: [embed], components: [] });
+        if (interaction.customId.startsWith('vc_transfer_select_')) {
+            const channelId = interaction.customId.replace('vc_transfer_select_', '');
+            const voiceChannel = interaction.guild.channels.cache.get(channelId);
+            const newOwnerId = interaction.values[0];
+            
+            const channelOwner = userPersonalChannels.get(voiceChannel.id);
+            if (channelOwner !== interaction.user.id && !isMod(interaction.member)) {
+                await interaction.reply({ content: '❌ You can only transfer your own personal voice channel!', ephemeral: true });
+                return;
+            }
+            
+            // Update ownership
+            userPersonalChannels.set(voiceChannel.id, newOwnerId);
+            
+            // Update permissions
+            await voiceChannel.permissionOverwrites.edit(newOwnerId, {
+                ManageChannels: true,
+                MuteMembers: true,
+                DeafenMembers: true,
+                MoveMembers: true
+            });
+            
+            await interaction.reply({ content: `✅ Transferred ownership to <@${newOwnerId}>!`, ephemeral: true });
+            return;
         }
-        return;
+    }
+    
+    // Handle modals for voice control
+    if (interaction.isModalSubmit()) {
+        if (interaction.customId.startsWith('vc_rename_modal_')) {
+            const channelId = interaction.customId.replace('vc_rename_modal_', '');
+            const voiceChannel = interaction.guild.channels.cache.get(channelId);
+            const newName = interaction.fields.getTextInputValue('new_name');
+            
+            const channelOwner = userPersonalChannels.get(voiceChannel.id);
+            if (channelOwner !== interaction.user.id && !isMod(interaction.member)) {
+                await interaction.reply({ content: '❌ You can only rename your own personal voice channel!', ephemeral: true });
+                return;
+            }
+            
+            await voiceChannel.setName(newName);
+            await interaction.reply({ content: `✅ Renamed channel to **${newName}**!`, ephemeral: true });
+            return;
+        }
+        
+        if (interaction.customId.startsWith('vc_limit_modal_')) {
+            const channelId = interaction.customId.replace('vc_limit_modal_', '');
+            const voiceChannel = interaction.guild.channels.cache.get(channelId);
+            const limit = parseInt(interaction.fields.getTextInputValue('user_limit'));
+            
+            if (isNaN(limit) || limit < 0 || limit > 99) {
+                await interaction.reply({ content: '❌ Invalid limit! Please enter a number between 0 and 99.', ephemeral: true });
+                return;
+            }
+            
+            const channelOwner = userPersonalChannels.get(voiceChannel.id);
+            if (channelOwner !== interaction.user.id && !isMod(interaction.member)) {
+                await interaction.reply({ content: '❌ You can only set limit for your own personal voice channel!', ephemeral: true });
+                return;
+            }
+            
+            await voiceChannel.setUserLimit(limit);
+            await interaction.reply({ content: `✅ User limit set to ${limit === 0 ? 'unlimited' : limit}!`, ephemeral: true });
+            return;
+        }
     }
     
     // Verification button
-    if (interaction.customId === 'verify_button') {
+    if (interaction.isButton() && interaction.customId === 'verify_button') {
         const cfg = await getVerif(interaction.guild.id);
         if (!cfg) return interaction.reply({ content: '❌ Not configured', ephemeral: true });
         if (cfg.auto_role && interaction.member.roles.cache.has(cfg.auto_role)) await interaction.member.roles.remove(cfg.auto_role);
         await interaction.member.roles.add(cfg.verified_role);
         await interaction.reply({ embeds: [new EmbedBuilder().setColor(0x22C55E).setTitle('✅ Verified!')], ephemeral: true });
+        return;
     }
     
     // Reaction role buttons
-    if (interaction.customId === 'role_phone' || interaction.customId === 'role_pc') {
+    if (interaction.isButton() && (interaction.customId === 'role_phone' || interaction.customId === 'role_pc')) {
         const roles = await getRR(interaction.guild.id, interaction.message.id);
         const targetEmoji = interaction.customId === 'role_phone' ? '📱' : '💻';
         const role = roles.find(r => r.emoji === targetEmoji);
@@ -1383,10 +1667,11 @@ client.on('interactionCreate', async (interaction) => {
                 await interaction.reply({ content: `✅ ${interaction.member.roles.cache.has(r.id) ? 'Removed' : 'Added'} ${r.name}`, ephemeral: true });
             }
         }
+        return;
     }
     
     // Ticket buttons
-    if (interaction.customId === 'create_ticket') {
+    if (interaction.isButton() && interaction.customId === 'create_ticket') {
         const existing = await getTicket(interaction.user.id, interaction.guild.id);
         if (existing) return interaction.reply({ content: `❌ You have a ticket: <#${existing.channel_id}>`, ephemeral: true });
         const cfg = await getTicketConfig(interaction.guild.id);
@@ -1409,18 +1694,27 @@ client.on('interactionCreate', async (interaction) => {
         );
         await ch.send({ content: `${interaction.user}`, embeds: [embed], components: [row] });
         await interaction.reply({ content: `✅ Ticket: ${ch}`, ephemeral: true });
+        return;
     }
     
-    if (interaction.customId === 'close_ticket') {
+    if (interaction.isButton() && interaction.customId === 'close_ticket') {
         if (!isMod(interaction.member)) return interaction.reply({ content: '❌ No permission', ephemeral: true });
         await delTicket(interaction.user.id, interaction.guild.id);
         await interaction.reply('🔒 Closing...');
         setTimeout(() => interaction.channel.delete(), 3000);
+        return;
     }
     
-    if (interaction.customId === 'claim_ticket') {
+    if (interaction.isButton() && interaction.customId === 'claim_ticket') {
         if (!isMod(interaction.member)) return interaction.reply({ content: '❌ No permission', ephemeral: true });
         await interaction.reply({ embeds: [new EmbedBuilder().setColor(0x22C55E).setTitle('🎫 Claimed').setDescription(`${interaction.user} claimed this ticket`)] });
+        return;
+    }
+    
+    // Giveaway confirmation buttons
+    if (interaction.isButton() && (interaction.customId === 'confirm_giveaway' || interaction.customId === 'cancel_giveaway')) {
+        // Handled in the message collector, but prevent unhandled error
+        return;
     }
 });
 
@@ -1432,7 +1726,11 @@ client.once('ready', async () => {
     console.log(`🤖 AI Chat System Ready - Natural Darija Support`);
     console.log(`📝 AI Commands: -ai <message> | -ask <question> | -iahelp`);
     console.log(`🎉 Giveaway Command: -gv <winners> <time> <prize>`);
-    console.log(`🎤 Auto Voice System: -voice add <channel_id> | -cn <channel_id>`);
+    console.log(`🎤 Auto Voice System:`);
+    console.log(`   • -voice add <channel_id> - Enable auto personal VC`);
+    console.log(`   • -cn <channel_id> - Send control panel to text channel`);
+    console.log(`   • Personal channels use username only (no suffix)`);
+    console.log(`   • Full control panel with: Lock, Unlock, Hide, Unhide, Kick, Mute All, Unmute All, Rename, User Limit, Transfer Ownership`);
     console.log(`📋 Other Commands: -help for full list`);
     client.user.setActivity('-help for commands', { type: 3 });
     setTimeout(() => joinVoiceChannelProper(), 3000);
